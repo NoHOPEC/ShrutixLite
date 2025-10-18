@@ -1,0 +1,517 @@
+import os
+import asyncio
+import subprocess
+import signal
+import logging
+import aiohttp
+from datetime import datetime
+from typing import Dict, List, Optional
+from pyrogram import filters
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from ShrutiMusic import app
+from ShrutiMusic.misc import SUDOERS
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class RTMPStreamer:
+    def __init__(self):
+        self.active_streams: Dict[int, Dict] = {}
+        self.chat_queues: Dict[int, List[str]] = {}
+        self.rtmp_settings: Dict[int, Dict] = {}
+        self.cookies_file = "/tmp/youtube_cookies.txt"
+        
+    def _cleanup_handler(self, signum, frame):
+        logger.info("Cleaning up active RTMP streams...")
+        for chat_id in list(self.active_streams.keys()):
+            try:
+                process_info = self.active_streams[chat_id]
+                process = process_info.get('process')
+                if process:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+            except Exception as e:
+                logger.error(f"Error cleaning up stream for chat {chat_id}: {e}")
+    
+    async def download_cookies(self):
+        try:
+            cookies_url = os.getenv("COOKIES_URL", "https://batbin.me/raw/shudderingly")
+            async with aiohttp.ClientSession() as session:
+                async with session.get(cookies_url) as response:
+                    if response.status == 200:
+                        cookies_content = await response.text()
+                        with open(self.cookies_file, 'w') as f:
+                            f.write(cookies_content)
+                        logger.info("Cookies downloaded successfully")
+                        return True
+                    logger.error(f"Failed to download cookies: {response.status}")
+                    return False
+        except Exception as e:
+            logger.error(f"Error downloading cookies: {e}")
+            return False
+    
+    async def get_video_info(self, query: str) -> Dict:
+        try:
+            if not os.path.exists(self.cookies_file):
+                await self.download_cookies()
+            
+            is_url = query.startswith(("http://", "https://", "www."))
+            
+            cmd = [
+                "yt-dlp", 
+                "--no-playlist",
+                "--cookies", self.cookies_file,
+                "--print", "title",
+                "--print", "duration",
+                "--print", "uploader",
+                "--print", "webpage_url",
+                "--print", "thumbnail"
+            ]
+            
+            if is_url:
+                cmd.append(query)
+            else:
+                cmd.append(f"ytsearch1:{query}")
+            
+            result = subprocess.run(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
+                text=True, 
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                return {
+                    'title': lines[0] if len(lines) > 0 else "Unknown",
+                    'duration': lines[1] if len(lines) > 1 else "Unknown",
+                    'uploader': lines[2] if len(lines) > 2 else "Unknown",
+                    'url': lines[3] if len(lines) > 3 else None,
+                    'thumbnail': lines[4] if len(lines) > 4 else None
+                }
+            else:
+                logger.error(f"yt-dlp search error: {result.stderr}")
+                if "Sign in to confirm" in result.stderr:
+                    logger.info("Re-downloading cookies due to authentication error")
+                    await self.download_cookies()
+                return None
+        except Exception as e:
+            logger.error(f"Error getting video info: {e}")
+            return None
+    
+    async def get_stream_url(self, video_url: str) -> Optional[str]:
+        try:
+            if not os.path.exists(self.cookies_file):
+                await self.download_cookies()
+            
+            cmd = [
+                "yt-dlp",
+                "--no-playlist",
+                "--cookies", self.cookies_file,
+                "-g", 
+                "--format", "best[height<=720]/best",
+                video_url
+            ]
+            
+            result = subprocess.run(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
+                text=True, 
+                timeout=45
+            )
+            
+            if result.returncode == 0:
+                stream_url = result.stdout.strip()
+                if stream_url and not stream_url.startswith('ERROR'):
+                    return stream_url
+            else:
+                logger.error(f"yt-dlp stream URL error: {result.stderr}")
+                if "Sign in to confirm" in result.stderr:
+                    logger.info("Re-downloading cookies due to authentication error")
+                    await self.download_cookies()
+            return None
+        except Exception as e:
+            logger.error(f"Error extracting stream URL: {e}")
+            return None
+    
+    async def start_stream_process(self, chat_id: int, rtmp_url: str, stream_key: str, stream_url: str, video_info: Dict):
+        try:
+            full_rtmp_url = f"{rtmp_url}{stream_key}"
+            logger.info(f"Starting RTMP stream for chat {chat_id}")
+            
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-re",
+                "-i", stream_url,
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-crf", "28",
+                "-maxrate", "2000k",
+                "-bufsize", "4000k",
+                "-g", "60",
+                "-keyint_min", "30",
+                "-sc_threshold", "0",
+                "-c:a", "aac",
+                "-ar", "44100",
+                "-b:a", "128k",
+                "-ac", "2",
+                "-f", "flv",
+                full_rtmp_url,
+                "-y"
+            ]
+            
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.PIPE,
+                preexec_fn=os.setsid if os.name != 'nt' else None
+            )
+            
+            self.active_streams[chat_id] = {
+                'process': process,
+                'started_at': datetime.now(),
+                'video_info': video_info,
+                'rtmp_url': rtmp_url,
+                'stream_key': stream_key
+            }
+            
+            logger.info(f"RTMP stream started successfully for chat {chat_id}, PID: {process.pid}")
+            asyncio.create_task(self._monitor_stream(chat_id))
+            return process
+        except Exception as e:
+            logger.error(f"Error starting RTMP stream for chat {chat_id}: {e}")
+            if chat_id in self.active_streams:
+                del self.active_streams[chat_id]
+            return None
+    
+    async def _monitor_stream(self, chat_id: int):
+        try:
+            if chat_id not in self.active_streams:
+                return
+            
+            process_info = self.active_streams[chat_id]
+            process = process_info['process']
+            
+            while process.poll() is None:
+                await asyncio.sleep(5)
+            
+            return_code = process.poll()
+            logger.info(f"RTMP stream for chat {chat_id} completed with code {return_code}")
+            
+            if return_code == 0:
+                await self._auto_play_next(chat_id)
+            
+            if chat_id in self.active_streams:
+                del self.active_streams[chat_id]
+        except Exception as e:
+            logger.error(f"Error monitoring RTMP stream for chat {chat_id}: {e}")
+    
+    async def _auto_play_next(self, chat_id: int):
+        try:
+            if chat_id in self.chat_queues and self.chat_queues[chat_id]:
+                next_song = self.chat_queues[chat_id].pop(0)
+                await asyncio.sleep(2)
+                await self.play_song(chat_id, next_song)
+        except Exception as e:
+            logger.error(f"Error auto-playing next song for chat {chat_id}: {e}")
+    
+    async def play_song(self, chat_id: int, query: str) -> tuple[bool, str]:
+        try:
+            if chat_id not in self.rtmp_settings:
+                return False, "❌ RTMP settings not configured. Use /setrtmps first."
+            
+            settings = self.rtmp_settings[chat_id]
+            rtmp_url = settings.get('rtmp_url')
+            stream_key = settings.get('stream_key')
+            
+            if not rtmp_url or not stream_key:
+                return False, "❌ RTMP URL or Stream Key missing. Use /setrtmps to configure."
+            
+            video_info = await self.get_video_info(query)
+            if not video_info or not video_info.get('url'):
+                return False, f"❌ Could not find video for: {query}"
+            
+            if chat_id in self.active_streams:
+                if chat_id not in self.chat_queues:
+                    self.chat_queues[chat_id] = []
+                self.chat_queues[chat_id].append(query)
+                queue_position = len(self.chat_queues[chat_id])
+                return True, f"✅ Added to queue #{queue_position}: {video_info['title']}"
+            
+            stream_url = await self.get_stream_url(video_info['url'])
+            if not stream_url:
+                return False, f"❌ Could not get stream URL for: {video_info['title']}"
+            
+            process = await self.start_stream_process(chat_id, rtmp_url, stream_key, stream_url, video_info)
+            
+            if process:
+                return True, ""
+            return False, "❌ Failed to start RTMP stream."
+        except Exception as e:
+            logger.error(f"Error playing song: {e}")
+            return False, "❌ An error occurred while trying to play the song."
+    
+    async def skip_current(self, chat_id: int) -> tuple[bool, str]:
+        try:
+            if chat_id not in self.active_streams:
+                return False, "❌ No active stream to skip."
+            
+            current_info = self.active_streams[chat_id]
+            current_title = current_info['video_info']['title']
+            
+            await self.stop_stream(chat_id)
+            await asyncio.sleep(2)
+            
+            if chat_id in self.chat_queues and self.chat_queues[chat_id]:
+                next_song = self.chat_queues[chat_id].pop(0)
+                success, message = await self.play_song(chat_id, next_song)
+                if success:
+                    return True, f"⏭️ Skipped: {current_title[:30]}...\n{message}"
+            
+            return True, f"⏭️ Skipped: {current_title}"
+        except Exception as e:
+            logger.error(f"Error skipping song: {e}")
+            return False, "❌ Error occurred while skipping."
+    
+    async def stop_stream(self, chat_id: int) -> bool:
+        try:
+            if chat_id in self.active_streams:
+                process_info = self.active_streams[chat_id]
+                process = process_info['process']
+                
+                if os.name != 'nt':
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                else:
+                    process.terminate()
+                
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    if os.name != 'nt':
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    else:
+                        process.kill()
+                    process.wait(timeout=5)
+                
+                del self.active_streams[chat_id]
+                logger.info(f"RTMP stream stopped for chat {chat_id}")
+                return True
+        except Exception as e:
+            logger.error(f"Error stopping stream for chat {chat_id}: {e}")
+        return False
+
+rtmp_streamer = RTMPStreamer()
+signal.signal(signal.SIGTERM, rtmp_streamer._cleanup_handler)
+signal.signal(signal.SIGINT, rtmp_streamer._cleanup_handler)
+
+@app.on_message(filters.command("setrtmps"))
+async def set_rtmp_settings(client, message: Message):
+    user_id = message.from_user.id
+    is_private = message.chat.type == "private"
+    
+    try:
+        args = message.text.split(None, 3 if is_private else 2)
+        
+        if is_private:
+            if len(args) < 4:
+                return await message.reply_text(
+                    "<b>📡 Set RTMP Settings (Private Chat)</b>\n\n"
+                    "<b>Usage:</b> <code>/setrtmps chat_id rtmp_url stream_key</code>\n\n"
+                    "<b>Example:</b>\n"
+                    "<code>/setrtmps -1001234567890 rtmp://live.twitch.tv/live/ your_stream_key_here</code>"
+                )
+            
+            try:
+                chat_id = int(args[1])
+                rtmp_url = args[2].strip()
+                stream_key = args[3].strip()
+            except ValueError:
+                return await message.reply_text("❌ Invalid chat ID! Please provide a valid numeric chat ID.")
+        else:
+            if len(args) < 3:
+                return await message.reply_text(
+                    "<b>📡 Set RTMP Settings</b>\n\n"
+                    "<b>Usage:</b> <code>/setrtmps rtmp_url stream_key</code>\n\n"
+                    "<b>Example:</b>\n"
+                    "<code>/setrtmps rtmp://live.twitch.tv/live/ your_stream_key_here</code>"
+                )
+            
+            chat_id = message.chat.id
+            rtmp_url = args[1].strip()
+            stream_key = args[2].strip()
+        
+        rtmp_streamer.rtmp_settings[chat_id] = {
+            'rtmp_url': rtmp_url,
+            'stream_key': stream_key,
+            'set_by': user_id,
+            'set_at': datetime.now()
+        }
+        
+        masked_key = f"{'*' * (len(stream_key) - 4)}{stream_key[-4:]}" if len(stream_key) > 4 else '*' * len(stream_key)
+        
+        success_msg = (
+            f"✅ <b>RTMP Settings Configured!</b>\n\n"
+            f"🔗 <b>RTMP URL:</b> <code>{rtmp_url}</code>\n"
+            f"🔑 <b>Stream Key:</b> <code>{masked_key}</code>\n"
+        )
+        
+        if is_private:
+            success_msg += f"\n🎯 <b>Target Chat:</b> <code>{chat_id}</code>"
+        
+        await message.reply_text(success_msg)
+        
+        if not is_private:
+            asyncio.create_task(delete_message_later(message, 10))
+    except Exception as e:
+        logger.error(f"Error setting RTMP settings: {e}")
+        await message.reply_text("❌ An error occurred while setting RTMP configuration.")
+
+async def delete_message_later(message: Message, delay: int):
+    try:
+        await asyncio.sleep(delay)
+        await message.delete()
+    except Exception as e:
+        logger.error(f"Error deleting message: {e}")
+
+@app.on_message(filters.command("playrtmps") & filters.group)
+async def play_rtmp_stream(client, message: Message):
+    chat_id = message.chat.id
+    
+    try:
+        if len(message.command) < 2:
+            return await message.reply_text(
+                "<b>🎵 Play RTMP Stream</b>\n\n"
+                "<b>Usage:</b> <code>/playrtmps song_name_or_url</code>\n\n"
+                "<b>Examples:</b>\n"
+                "• <code>/playrtmps Imagine Dragons Believer</code>\n"
+                "• <code>/playrtmps https://youtu.be/7wtfhZwyrcc</code>"
+            )
+        
+        query = " ".join(message.command[1:])
+        processing_msg = await message.reply_text(f"🔄 <b>Processing:</b> <code>{query}</code>\n\nPlease wait...")
+        
+        success, response_message = await rtmp_streamer.play_song(chat_id, query)
+        
+        if success:
+            if response_message:
+                await processing_msg.edit_text(response_message)
+            else:
+                video_info = rtmp_streamer.active_streams[chat_id]['video_info']
+                user = message.from_user
+                
+                caption = (
+                    f"📡 <b>sᴛᴀʀᴛᴇᴅ sᴛʀᴇᴀᴍɪɴɢ...</b>\n\n"
+                    f"🎵 <b>ᴛɪᴛʟᴇ:</b> {video_info['title']}\n"
+                    f"👤 <b>ᴜᴘʟᴏᴀᴅᴇʀ:</b> {video_info['uploader']}\n\n"
+                    f"🙋 <b>ᴘʟᴀʏᴇᴅ ʙʏ:</b> {user.mention}"
+                )
+                
+                keyboard = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "➕ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ",
+                                url=f"https://t.me/{app.username}?startgroup=true",
+                            )
+                        ]
+                    ]
+                )
+                
+                if video_info.get("thumbnail"):
+                    await processing_msg.delete()
+                    await app.send_photo(
+                        chat_id=chat_id,
+                        photo=video_info["thumbnail"],
+                        caption=caption,
+                        reply_markup=keyboard
+                    )
+                else:
+                    await processing_msg.edit_text(
+                        caption,
+                        reply_markup=keyboard,
+                        disable_web_page_preview=True
+                    )
+        else:
+            await processing_msg.edit_text(response_message)
+    except Exception as e:
+        logger.error(f"Error in play RTMP command: {e}")
+        await message.reply_text("❌ An error occurred while processing your request.")
+
+@app.on_message(filters.command("skiprtmps") & filters.group)
+async def skip_rtmp_stream(client, message: Message):
+    chat_id = message.chat.id
+    
+    try:
+        processing_msg = await message.reply_text("⏭️ <b>Skipping...</b>")
+        success, response_message = await rtmp_streamer.skip_current(chat_id)
+        await processing_msg.edit_text(response_message)
+    except Exception as e:
+        logger.error(f"Error in skip RTMP command: {e}")
+        await message.reply_text("❌ An error occurred while skipping.")
+
+@app.on_message(filters.command("endrtmps") & filters.group)
+async def end_rtmp_stream(client, message: Message):
+    chat_id = message.chat.id
+    
+    try:
+        if chat_id not in rtmp_streamer.active_streams:
+            return await message.reply_text("❌ No active RTMP stream to end.")
+        
+        stream_info = rtmp_streamer.active_streams[chat_id]
+        duration = datetime.now() - stream_info['started_at']
+        current_song = stream_info['video_info']['title']
+        
+        success = await rtmp_streamer.stop_stream(chat_id)
+        
+        if chat_id in rtmp_streamer.chat_queues:
+            rtmp_streamer.chat_queues[chat_id] = []
+        
+        if success:
+            total_seconds = int(duration.total_seconds())
+            minutes, seconds = divmod(total_seconds, 60)
+            duration_str = f"{minutes}m {seconds}s"
+            
+            await message.reply_text(
+                f"⏹️ <b>RTMP Stream Ended</b>\n\n"
+                f"🎵 <b>Last Song:</b> {current_song[:40]}{'...' if len(current_song) > 40 else ''}\n"
+                f"⏱️ <b>Duration:</b> {duration_str}"
+            )
+        else:
+            await message.reply_text("❌ Error occurred while ending the stream.")
+    except Exception as e:
+        logger.error(f"Error in end RTMP command: {e}")
+        await message.reply_text("❌ An error occurred while ending the stream.")
+
+@app.on_message(filters.command("helprtmps"))
+async def rtmp_help(client, message: Message):
+    help_text = """<b>📡 RTMP Streaming Help</b>
+
+<b>🔧 Setup Commands:</b>
+• <code>/setrtmps rtmp_url stream_key</code> - Configure RTMP settings
+• <code>/setrtmps chat_id rtmp_url stream_key</code> - Configure via DM
+
+<b>🎵 Streaming Commands:</b>
+• <code>/playrtmps song_name_or_url</code> - Play song via RTMP
+• <code>/skiprtmps</code> - Skip current song
+• <code>/endrtmps</code> - Stop RTMP stream
+
+<b>📝 Examples:</b>
+• <code>/playrtmps Imagine Dragons Thunder</code>
+• <code>/playrtmps https://youtu.be/7wtfhZwyrcc</code>
+
+<b>🎯 Supported Platforms:</b>
+• Twitch: <code>rtmp://live.twitch.tv/live/</code>
+• YouTube: <code>rtmp://a.rtmp.youtube.com/live2/</code>
+• Facebook: <code>rtmps://live-api-s.facebook.com:443/rtmp/</code>"""
+    
+    await message.reply_text(help_text)
