@@ -23,7 +23,10 @@ class AWelDatabase:
     async def find_one(chat_id):
         """Return True if welcome is OFF for this chat"""
         doc = await awelcome_collection.find_one({"chat_id": chat_id})
-        return doc is not None and doc.get("state") == "off"
+        # Agar doc hi nahi hai, to default OFF return kare
+        if not doc:
+            return True
+        return doc.get("state") == "off"
 
     @staticmethod
     async def add_wlcm(chat_id):
