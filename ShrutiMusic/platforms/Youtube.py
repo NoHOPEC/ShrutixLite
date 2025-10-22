@@ -16,7 +16,7 @@ import random
 import logging
 import aiohttp
 
-API_URL = "https://api.thequickearn.xyz"
+API_URL = "https://pytdbotapi.thequickearn.xyz"
 API_KEY = "NxGBNexGenBots7501a7"
 VIDEO_API_URL = "https://api.video.thequickearn.xyz"
 
