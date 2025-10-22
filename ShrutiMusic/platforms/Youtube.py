@@ -16,12 +16,10 @@ import random
 import logging
 import aiohttp
 
-# Original API config
 API_URL = "https://api.thequickearn.xyz"
 API_KEY = "NxGBNexGenBots7501a7"
-VIDEO_API_URL = None
+VIDEO_API_URL = "https://api.video.thequickearn.xyz"
 
-# Drive additions (optional - won't break if missing)
 try:
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
@@ -33,12 +31,11 @@ try:
     DRIVE_AVAILABLE = True
 except ImportError:
     DRIVE_AVAILABLE = False
-
-# Drive file paths (exactly as you have them)
+ 
 CLIENT_SECRET_PATH = "ShrutiMusic/assets/client_secret.json"
 TOKEN_PATH = "ShrutiMusic/assets/token.json"
 DRIVE_CACHE_PATH = "ShrutiMusic/assets/drive_cache.json"
-METADATA_DRIVE_FILENAME = "music_metadata.json"  # Fixed: Added missing filename
+METADATA_DRIVE_FILENAME = "music_metadata.json"
 DRIVE_FOLDER_ID = None
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
@@ -52,13 +49,11 @@ def cookie_txt_file():
     cookie_file = os.path.join(cookie_dir, random.choice(cookies_files))
     return cookie_file
 
-# Drive helper functions (exactly for your setup)
 def get_drive_service():
     if not DRIVE_AVAILABLE:
         return None
     
     creds = None
-    # Load existing token.json
     if os.path.exists(TOKEN_PATH):
         try:
             creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
@@ -66,7 +61,6 @@ def get_drive_service():
             print(f"Token load error: {e}")
             creds = None
     
-    # If no valid creds, refresh or create new
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
@@ -76,13 +70,11 @@ def get_drive_service():
                 print(f"Token refresh failed: {e}")
                 creds = None
         else:
-            # Need new authorization
             if not os.path.exists(CLIENT_SECRET_PATH):
                 print(f"client_secret.json not found at {CLIENT_SECRET_PATH}")
                 return None
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_PATH, SCOPES)
-                # For server deployment - use console flow
                 auth_url, _ = flow.authorization_url(prompt='consent')
                 print("Authorize this URL in your browser and paste the code here:")
                 print(auth_url)
@@ -94,7 +86,6 @@ def get_drive_service():
                 print(f"OAuth flow failed: {e}")
                 return None
         
-        # Save updated credentials
         try:
             os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
             with open(TOKEN_PATH, "w") as f:
@@ -111,6 +102,81 @@ def get_drive_service():
         print(f"Drive service build failed: {e}")
         return None
 
+def search_drive_by_video_id(video_id):
+    """Direct search in Drive by video ID without using cache"""
+    service = get_drive_service()
+    if not service:
+        return None
+    
+    try:
+        # Search directly in Drive for files containing the video_id in name
+        query = f"name contains '{video_id}' and trashed=false"
+        if DRIVE_FOLDER_ID:
+            query += f" and '{DRIVE_FOLDER_ID}' in parents"
+        
+        results = service.files().list(
+            q=query,
+            fields="files(id, name, size, mimeType)",
+            pageSize=10
+        ).execute()
+        
+        files = results.get('files', [])
+        if not files:
+            return None
+        
+        # Filter for exact matches and get the first one
+        exact_matches = [f for f in files if f['name'].startswith(f"{video_id}.")]
+        if exact_matches:
+            return exact_matches[0]['id']
+        
+        return None
+    except Exception as e:
+        print(f"Drive search error for {video_id}: {e}")
+        return None
+
+def cleanup_duplicate_files(video_id):
+    """Clean up duplicate files in Drive for the same video ID"""
+    service = get_drive_service()
+    if not service:
+        return False
+    
+    try:
+        query = f"name contains '{video_id}' and trashed=false"
+        if DRIVE_FOLDER_ID:
+            query += f" and '{DRIVE_FOLDER_ID}' in parents"
+        
+        results = service.files().list(
+            q=query,
+            fields="files(id, name, createdTime)",
+            pageSize=20
+        ).execute()
+        
+        files = results.get('files', [])
+        if len(files) <= 1:
+            return True
+        
+        # Sort by creation time (oldest first)
+        files.sort(key=lambda x: x.get('createdTime', ''))
+        
+        # Keep the first file, delete others
+        kept_file = files[0]
+        deleted_count = 0
+        
+        for file in files[1:]:
+            try:
+                service.files().delete(fileId=file['id']).execute()
+                print(f"Deleted duplicate file: {file['name']} ({file['id']})")
+                deleted_count += 1
+            except Exception as e:
+                print(f"Failed to delete duplicate {file['id']}: {e}")
+        
+        print(f"Cleaned up {deleted_count} duplicate files for {video_id}")
+        return True
+        
+    except Exception as e:
+        print(f"Duplicate cleanup error for {video_id}: {e}")
+        return False
+
 def download_metadata_from_drive():
     """Download metadata file from Drive to local cache"""
     service = get_drive_service()
@@ -118,7 +184,6 @@ def download_metadata_from_drive():
         print("Drive service not available for metadata download")
         return False
     try:
-        # Find metadata file by name
         q = f"name='{METADATA_DRIVE_FILENAME}' and trashed=false"
         res = service.files().list(q=q, fields="files(id,name)").execute()
         files = res.get("files", [])
@@ -149,7 +214,6 @@ def upload_metadata_to_drive():
         print("Cannot upload metadata - service unavailable or file missing")
         return False
     try:
-        # Check if metadata file already exists on Drive
         q = f"name='{METADATA_DRIVE_FILENAME}' and trashed=false"
         res = service.files().list(q=q, fields="files(id,name)").execute()
         files = res.get("files", [])
@@ -157,11 +221,9 @@ def upload_metadata_to_drive():
         media = MediaFileUpload(DRIVE_CACHE_PATH, mimetype="application/json", resumable=True)
         
         if files:
-            # Update existing file
             service.files().update(fileId=files[0]["id"], media_body=media).execute()
             print("Updated metadata file on Drive")
         else:
-            # Create new file
             body = {"name": METADATA_DRIVE_FILENAME}
             if DRIVE_FOLDER_ID:
                 body["parents"] = [DRIVE_FOLDER_ID]
@@ -180,7 +242,6 @@ def load_drive_cache():
     
     cache_data = {}
     
-    # Try to load local cache first
     if os.path.exists(DRIVE_CACHE_PATH):
         try:
             with open(DRIVE_CACHE_PATH, 'r') as f:
@@ -190,7 +251,6 @@ def load_drive_cache():
             print(f"Local cache load error: {e}")
             cache_data = {}
     
-    # If local cache is empty or doesn't exist, try downloading from Drive
     if not cache_data:
         print("Local cache empty/missing, attempting Drive download...")
         if download_metadata_from_drive():
@@ -213,13 +273,11 @@ def save_drive_cache(cache_data):
         return False
         
     try:
-        # Always save locally first
         os.makedirs(os.path.dirname(DRIVE_CACHE_PATH), exist_ok=True)
         with open(DRIVE_CACHE_PATH, 'w') as f:
             json.dump(cache_data, f, indent=2)
         print(f"Local cache saved with {len(cache_data)} entries")
         
-        # Try to upload to Drive (non-blocking)
         try:
             if upload_metadata_to_drive():
                 print("Cache successfully synced to Drive")
@@ -234,7 +292,7 @@ def save_drive_cache(cache_data):
         return False
 
 def upload_to_drive(file_path, video_id):
-    """Upload file to Drive with better error handling"""
+    """Upload file to Drive with size check and duplicate cleanup"""
     service = get_drive_service()
     if not service:
         print("Drive service not available for upload")
@@ -243,8 +301,19 @@ def upload_to_drive(file_path, video_id):
     if not os.path.exists(file_path):
         print(f"File not found for upload: {file_path}")
         return None
+    
+    # Check file size before upload (120MB limit)
+    file_size = os.path.getsize(file_path)
+    file_size_mb = file_size / (1024 * 1024)
+    
+    if file_size_mb > 120:
+        print(f"File size {file_size_mb:.2f} MB exceeds 120MB limit. Skipping upload.")
+        return None
         
     try:
+        # Clean up any existing duplicates first
+        cleanup_duplicate_files(video_id)
+        
         file_metadata = {"name": f"{video_id}.mp3"}
         if DRIVE_FOLDER_ID:
             file_metadata["parents"] = [DRIVE_FOLDER_ID]
@@ -256,7 +325,7 @@ def upload_to_drive(file_path, video_id):
             fields="id"
         ).execute()
         drive_id = file.get("id")
-        print(f"Successfully uploaded to Drive: {video_id} -> {drive_id}")
+        print(f"Successfully uploaded to Drive: {video_id} -> {drive_id} ({file_size_mb:.2f} MB)")
         return drive_id
     except Exception as e:
         print(f"Drive upload failed for {video_id}: {e}")
@@ -270,7 +339,6 @@ def download_from_drive(drive_file_id, dest_path):
         return False
         
     try:
-        # Check if file exists on Drive first
         try:
             service.files().get(fileId=drive_file_id).execute()
         except Exception as e:
@@ -293,8 +361,7 @@ def download_from_drive(drive_file_id, dest_path):
         return False
 
 async def download_song(link: str):
-    """Enhanced download function with proper fallback handling"""
-    # Better video_id extraction
+    """Enhanced download function with direct Drive search and duplicate handling"""
     video_id = None
     if 'v=' in link:
         video_id = link.split('v=')[-1].split('&')[0]
@@ -311,14 +378,50 @@ async def download_song(link: str):
     print(f"Processing download for video_id: {video_id}")
     print(f"Original link: {link}")
     
-    # Step 1: Check local files first
+    # First check local files
     for ext in ["mp3", "m4a", "webm"]:
         file_path = f"{download_folder}/{video_id}.{ext}"
         if os.path.exists(file_path):
             print(f"Found local file: {file_path}")
             return file_path
     
-    # Step 2: Check Drive cache if available
+    # DIRECT DRIVE SEARCH (FAST PATH) - Skip cache, search directly in Drive
+    if DRIVE_AVAILABLE:
+        print(f"Performing direct Drive search for: {video_id}")
+        drive_file_id = search_drive_by_video_id(video_id)
+        
+        if drive_file_id:
+            local_path = f"{download_folder}/{video_id}.mp3"
+            print(f"Found via direct Drive search! Downloading {video_id}")
+            if download_from_drive(drive_file_id, local_path):
+                print(f"Successfully retrieved from Drive (direct search): {local_path}")
+                
+                # Update cache with the found file
+                try:
+                    cache = load_drive_cache()
+                    if video_id not in cache:
+                        file_size = os.path.getsize(local_path)
+                        cache[video_id] = {
+                            "drive_file_id": drive_file_id,
+                            "uploaded_at": datetime.now().isoformat(),
+                            "format": "mp3",
+                            "file_size": file_size,
+                            "title": "Unknown",
+                            "found_via_direct_search": True
+                        }
+                        save_drive_cache(cache)
+                        print(f"Updated cache with direct search result: {video_id}")
+                except Exception as e:
+                    print(f"Cache update after direct search failed: {e}")
+                
+                return local_path
+            else:
+                print("Direct Drive download failed, cleaning up...")
+                cleanup_duplicate_files(video_id)
+        else:
+            print(f"Video_id {video_id} not found via direct Drive search")
+    
+    # Fallback to cache-based approach if direct search fails
     if DRIVE_AVAILABLE:
         cache = load_drive_cache()
         print(f"Checking Drive cache for video_id: {video_id}")
@@ -333,23 +436,20 @@ async def download_song(link: str):
                     return local_path
                 else:
                     print("Drive download failed, removing from cache and trying API")
-                    # Remove invalid entry from cache
                     try:
                         del cache[video_id]
                         save_drive_cache(cache)
+                        cleanup_duplicate_files(video_id)
                         print("Removed invalid entry from cache")
                     except Exception as e:
                         print(f"Cache cleanup error: {e}")
-        else:
-            print(f"Video_id {video_id} not found in Drive cache")
     
-    # Step 3: Try YouTube API
     print(f"Attempting API download for video_id: {video_id}")
     api_success = False
     
     song_url = f"{API_URL}/song/{video_id}?api={API_KEY}"
     async with aiohttp.ClientSession() as session:
-        for attempt in range(10):
+        for attempt in range(5):
             try:
                 async with session.get(song_url) as response:
                     if response.status != 200:
@@ -378,7 +478,6 @@ async def download_song(link: str):
                     break
                 await asyncio.sleep(2)
 
-        # Step 4: Download from API if successful
         if api_success:
             try:
                 file_format = data.get("format", "mp3")
@@ -399,23 +498,28 @@ async def download_song(link: str):
                     
                     print(f"API download completed: {file_name} ({total_size} bytes)")
                     
-                    # Upload to Drive if successful
+                    # Upload to Drive with size check and duplicate cleanup
                     if DRIVE_AVAILABLE and total_size > 0:
                         try:
                             cache = load_drive_cache()
                             if video_id not in cache:
-                                print(f"Uploading to Drive: {video_id}")
-                                drive_file_id = upload_to_drive(file_path, video_id)
-                                if drive_file_id:
-                                    cache[video_id] = {
-                                        "drive_file_id": drive_file_id,
-                                        "uploaded_at": datetime.now().isoformat(),
-                                        "format": file_extension,
-                                        "file_size": total_size,
-                                        "title": "Unknown"  # You can get title from YouTube API if needed
-                                    }
-                                    save_drive_cache(cache)
-                                    print(f"Successfully cached to Drive: {video_id}")
+                                # Check file size before uploading
+                                file_size_mb = total_size / (1024 * 1024)
+                                if file_size_mb <= 120:
+                                    print(f"Uploading to Drive: {video_id} ({file_size_mb:.2f} MB)")
+                                    drive_file_id = upload_to_drive(file_path, video_id)
+                                    if drive_file_id:
+                                        cache[video_id] = {
+                                            "drive_file_id": drive_file_id,
+                                            "uploaded_at": datetime.now().isoformat(),
+                                            "format": file_extension,
+                                            "file_size": total_size,
+                                            "title": "Unknown"
+                                        }
+                                        save_drive_cache(cache)
+                                        print(f"Successfully cached to Drive: {video_id}")
+                                else:
+                                    print(f"Skipping Drive upload - file size {file_size_mb:.2f} MB exceeds 120MB limit")
                         except Exception as e:
                             print(f"Drive caching failed (non-critical): {e}")
                     
@@ -424,7 +528,6 @@ async def download_song(link: str):
             except Exception as e:
                 print(f"API file download failed: {e}")
     
-    # Step 5: Final fallback to yt-dlp with cookies
     print(f"API failed, trying yt-dlp fallback for: {video_id}")
     cookie_file = cookie_txt_file()
     if not cookie_file:
@@ -455,21 +558,27 @@ async def download_song(link: str):
             if os.path.exists(expected_path):
                 print(f"yt-dlp download successful: {expected_path}")
                 
-                # Try to upload to Drive
+                # Upload to Drive with size check
                 if DRIVE_AVAILABLE:
                     try:
                         cache = load_drive_cache()
                         if video_id not in cache:
-                            drive_file_id = upload_to_drive(expected_path, video_id)
-                            if drive_file_id:
-                                cache[video_id] = {
-                                    "drive_file_id": drive_file_id,
-                                    "uploaded_at": datetime.now().isoformat(),
-                                    "format": info.get('ext', 'mp3'),
-                                    "file_size": os.path.getsize(expected_path),
-                                    "title": info.get('title', 'Unknown')
-                                }
-                                save_drive_cache(cache)
+                            file_size = os.path.getsize(expected_path)
+                            file_size_mb = file_size / (1024 * 1024)
+                            
+                            if file_size_mb <= 120:
+                                drive_file_id = upload_to_drive(expected_path, video_id)
+                                if drive_file_id:
+                                    cache[video_id] = {
+                                        "drive_file_id": drive_file_id,
+                                        "uploaded_at": datetime.now().isoformat(),
+                                        "format": info.get('ext', 'mp3'),
+                                        "file_size": file_size,
+                                        "title": info.get('title', 'Unknown')
+                                    }
+                                    save_drive_cache(cache)
+                            else:
+                                print(f"Skipping Drive upload - file size {file_size_mb:.2f} MB exceeds 120MB limit")
                     except Exception as e:
                         print(f"Drive upload after yt-dlp failed: {e}")
                 
@@ -611,13 +720,11 @@ class YouTubeAPI:
         self.listbase = "https://youtube.com/playlist?list="
         self.reg = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
         
-        # Initialize Drive on startup
         if DRIVE_AVAILABLE:
             print("Initializing Drive integration...")
             service = get_drive_service()
             if service:
                 print("Drive integration ready")
-                # Load initial cache
                 cache = load_drive_cache()
                 print(f"Initial cache loaded with {len(cache)} entries")
             else:
@@ -710,7 +817,6 @@ class YouTubeAPI:
         if "&" in link:
             link = link.split("&")[0]
         
-        # Try video API first
         try:
             downloaded_file = await download_video(link)
             if downloaded_file:
@@ -718,7 +824,6 @@ class YouTubeAPI:
         except Exception as e:
             print(f"Video API failed: {e}")
         
-        # Fallback to cookies
         cookie_file = cookie_txt_file()
         if not cookie_file:
             return 0, "No cookies found. Cannot download video."
@@ -954,7 +1059,6 @@ class YouTubeAPI:
             result = await download_song(link)
             return result
         elif video:
-            # Try video API first
             try:
                 downloaded_file = await download_video(link)
                 if downloaded_file:
@@ -963,7 +1067,6 @@ class YouTubeAPI:
             except Exception as e:
                 print(f"Video API failed: {e}")
             
-            # Fallback to cookies
             cookie_file = cookie_txt_file()
             if not cookie_file:
                 print("No cookies found. Cannot download video.")
@@ -1004,7 +1107,6 @@ class YouTubeAPI:
         return downloaded_file, direct
 
 
-# Helper function to get cache statistics (for debugging)
 def get_cache_stats():
     """Get cache statistics for debugging"""
     if not DRIVE_AVAILABLE:
@@ -1032,9 +1134,8 @@ def get_cache_stats():
     except Exception as e:
         return {"status": f"Error: {e}"}
 
-# Helper function to clear invalid cache entries
 async def cleanup_cache():
-    """Clean up invalid cache entries"""
+    """Clean up invalid cache entries and duplicates"""
     if not DRIVE_AVAILABLE:
         print("Drive not available for cleanup")
         return False
@@ -1051,25 +1152,30 @@ async def cleanup_cache():
             return False
             
         cleaned_count = 0
+        # Clean invalid cache entries
         for video_id, entry in list(cache.items()):
             drive_file_id = entry.get("drive_file_id")
             if not drive_file_id:
                 continue
                 
             try:
-                # Check if file exists on Drive
                 service.files().get(fileId=drive_file_id).execute()
             except Exception:
-                # File not found on Drive, remove from cache
                 print(f"Removing invalid cache entry: {video_id}")
                 del cache[video_id]
                 cleaned_count += 1
         
-        if cleaned_count > 0:
+        # Clean duplicate files in Drive
+        duplicate_cleaned = 0
+        for video_id in cache:
+            if cleanup_duplicate_files(video_id):
+                duplicate_cleaned += 1
+        
+        if cleaned_count > 0 or duplicate_cleaned > 0:
             save_drive_cache(cache)
-            print(f"Cleaned {cleaned_count} invalid cache entries")
+            print(f"Cleaned {cleaned_count} invalid cache entries and {duplicate_cleaned} duplicate files")
         else:
-            print("No invalid entries found")
+            print("No invalid entries or duplicates found")
             
         return True
     except Exception as e:
