@@ -28,14 +28,11 @@ spotipy
 tgcrypto
 unidecode
 #uvloop
-yt-dlp
+#yt-dlp
 youtube-search
 youtube-search-python
 google-api-python-client
 google-auth
 google-auth-httplib2
 google-auth-oauthlib
-
-
-
-
+git+https://github.com/yt-dlp/yt-dlp.git
