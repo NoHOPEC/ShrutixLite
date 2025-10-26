@@ -28,7 +28,7 @@ from pyrogram.types import InlineKeyboardMarkup, InputMediaPhoto, Message
 from pytgcalls.exceptions import NoActiveGroupCall
 
 import config
-from ShrutiMusic import Apple, Resso, SoundCloud, Spotify, Telegram, YouTube, app
+from ShrutiMusic import Apple, Resso, Spotify, Telegram, YouTube, app
 from ShrutiMusic.core.call import Aviax
 from ShrutiMusic.utils import seconds_to_min, time_to_seconds
 from ShrutiMusic.utils.channelplay import get_channeplayCB
