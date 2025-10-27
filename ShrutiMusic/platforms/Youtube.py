@@ -8,8 +8,8 @@ import yt_dlp
 from pyrogram.enums import MessageEntityType
 from pyrogram.types import Message
 from youtubesearchpython.__future__ import VideosSearch
-from ShrutiMusic.utils.database import is_on_off
-from ShrutiMusic.utils.formatters import time_to_seconds
+from ShrutixMusic.utils.database import is_on_off
+from ShrutixMusic.utils.formatters import time_to_seconds
 import os
 import glob
 import random
@@ -110,6 +110,7 @@ def search_drive_by_video_id(video_id):
         return None
     
     try:
+        # Search directly in Drive for files containing the video_id in name
         query = f"name contains '{video_id}' and trashed=false"
         if DRIVE_FOLDER_ID:
             query += f" and '{DRIVE_FOLDER_ID}' in parents"
@@ -124,6 +125,7 @@ def search_drive_by_video_id(video_id):
         if not files:
             return None
         
+        # Filter for exact matches and get the first one
         exact_matches = [f for f in files if f['name'].startswith(f"{video_id}.")]
         if exact_matches:
             return exact_matches[0]['id']
@@ -154,7 +156,10 @@ def cleanup_duplicate_files(video_id):
         if len(files) <= 1:
             return True
         
+        # Sort by creation time (oldest first)
         files.sort(key=lambda x: x.get('createdTime', ''))
+        
+        # Keep the first file, delete others
         kept_file = files[0]
         deleted_count = 0
         
@@ -298,6 +303,7 @@ def upload_to_drive(file_path, video_id):
         print(f"File not found for upload: {file_path}")
         return None
     
+    # Check file size before upload (120MB limit)
     file_size = os.path.getsize(file_path)
     file_size_mb = file_size / (1024 * 1024)
     
@@ -306,6 +312,7 @@ def upload_to_drive(file_path, video_id):
         return None
         
     try:
+        # Clean up any existing duplicates first
         cleanup_duplicate_files(video_id)
         
         file_metadata = {"name": f"{video_id}.mp3"}
@@ -355,7 +362,7 @@ def download_from_drive(drive_file_id, dest_path):
         return False
 
 async def download_song(link: str):
-    """Enhanced download function with proper audio format selection"""
+    """Enhanced download function with optimized yt-dlp settings"""
     video_id = None
     if 'v=' in link:
         video_id = link.split('v=')[-1].split('&')[0]
@@ -372,14 +379,14 @@ async def download_song(link: str):
     print(f"Processing download for video_id: {video_id}")
     print(f"Original link: {link}")
     
-    # Check local files
+    # First check local files
     for ext in ["mp3", "m4a", "webm"]:
         file_path = f"{download_folder}/{video_id}.{ext}"
         if os.path.exists(file_path):
             print(f"Found local file: {file_path}")
             return file_path
     
-    # DIRECT DRIVE SEARCH
+    # DIRECT DRIVE SEARCH (FAST PATH) - Skip cache, search directly in Drive
     if DRIVE_AVAILABLE:
         print(f"Performing direct Drive search for: {video_id}")
         drive_file_id = search_drive_by_video_id(video_id)
@@ -390,6 +397,7 @@ async def download_song(link: str):
             if download_from_drive(drive_file_id, local_path):
                 print(f"Successfully retrieved from Drive (direct search): {local_path}")
                 
+                # Update cache with the found file
                 try:
                     cache = load_drive_cache()
                     if video_id not in cache:
@@ -414,7 +422,7 @@ async def download_song(link: str):
         else:
             print(f"Video_id {video_id} not found via direct Drive search")
     
-    # Check cache
+    # Fallback to cache-based approach if direct search fails
     if DRIVE_AVAILABLE:
         cache = load_drive_cache()
         print(f"Checking Drive cache for video_id: {video_id}")
@@ -437,15 +445,14 @@ async def download_song(link: str):
                     except Exception as e:
                         print(f"Cache cleanup error: {e}")
     
-    # API download
     print(f"Attempting API download for video_id: {video_id}")
     api_success = False
     
     song_url = f"{API_URL}/song/{video_id}?api={API_KEY}"
     async with aiohttp.ClientSession() as session:
-        for attempt in range(5):
+        for attempt in range(6):  # Increased to 6 attempts
             try:
-                async with session.get(song_url) as response:
+                async with session.get(song_url, timeout=10) as response:
                     if response.status != 200:
                         raise Exception(f"API request failed with status code {response.status}")
                 
@@ -461,14 +468,14 @@ async def download_song(link: str):
                         break
                     elif status == "downloading":
                         print(f"API processing... attempt {attempt + 1}")
-                        await asyncio.sleep(4)
+                        await asyncio.sleep(3)
                     else:
                         error_msg = data.get("error") or data.get("message") or f"Unexpected status '{status}'"
                         raise Exception(f"API error: {error_msg}")
             except Exception as e:
                 print(f"API attempt {attempt + 1} failed: {e}")
-                if attempt == 4:
-                    print("API completely failed after 5 attempts")
+                if attempt == 5:  # After 6 attempts
+                    print("API completely failed after 6 attempts")
                     break
                 await asyncio.sleep(2)
 
@@ -480,7 +487,7 @@ async def download_song(link: str):
                 file_path = os.path.join(download_folder, file_name)
 
                 print(f"Downloading from API: {file_name}")
-                async with session.get(download_url) as file_response:
+                async with session.get(download_url, timeout=30) as file_response:
                     with open(file_path, 'wb') as f:
                         total_size = 0
                         while True:
@@ -492,10 +499,12 @@ async def download_song(link: str):
                     
                     print(f"API download completed: {file_name} ({total_size} bytes)")
                     
+                    # Upload to Drive with size check and duplicate cleanup
                     if DRIVE_AVAILABLE and total_size > 0:
                         try:
                             cache = load_drive_cache()
                             if video_id not in cache:
+                                # Check file size before uploading
                                 file_size_mb = total_size / (1024 * 1024)
                                 if file_size_mb <= 120:
                                     print(f"Uploading to Drive: {video_id} ({file_size_mb:.2f} MB)")
@@ -520,74 +529,114 @@ async def download_song(link: str):
             except Exception as e:
                 print(f"API file download failed: {e}")
     
-    # YT-DLP FALLBACK with PROPER AUDIO FORMAT
-    print(f"API failed, trying yt-dlp fallback for: {video_id}")
+    print(f"API failed, trying optimized yt-dlp fallback for: {video_id}")
     cookie_file = cookie_txt_file()
-    if not cookie_file:
-        print("No cookies available for fallback download")
-        return None
-        
+    
     try:
-        # CRITICAL FIX: Proper audio-only format selection
-        # This will download ONLY audio, no fragments, no DASH
+        # OPTIMIZED YT-DLP SETTINGS WITH 100MB LIMIT FOR AUDIO
         ydl_opts = {
-            "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",  # Audio only, no DASH
+            "format": "bestaudio[filesize<100M]/bestaudio/best",
             "outtmpl": f"{download_folder}/{video_id}.%(ext)s",
             "geo_bypass": True,
             "nocheckcertificate": True,
             "quiet": True,
             "no_warnings": True,
-            "cookiefile": cookie_file,
-            "extract_flat": False,
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }],
+            "extractaudio": True,
+            "audioformat": "mp3",
+            "audioquality": "0",
+            "noplaylist": True,
+            "socket_timeout": 10,
+            "retries": 3,
+            "fragment_retries": 3,
+            "skip_unavailable_fragments": True,
+            "keep_fragments": False,
+            "hls_prefer_native": True,
+            "http_chunk_size": 10485760,  # 10MB chunks
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "web"],
+                    "player_skip": ["configs", "webpage", "js"]
+                }
+            },
+            "postprocessor_args": {
+                "ffmpeg": [
+                    "-ac", "2",
+                    "-f", "mp3"
+                ]
+            }
         }
         
-        print(f"yt-dlp starting with audio-only format for: {video_id}")
+        # Add cookies if available
+        if cookie_file and os.path.exists(cookie_file):
+            ydl_opts["cookiefile"] = cookie_file
+            print("Using cookies for yt-dlp")
+        else:
+            print("No cookies available, using without cookies")
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=False)
-            expected_path = f"{download_folder}/{video_id}.mp3"
-            
-            if os.path.exists(expected_path):
-                print(f"yt-dlp file already exists: {expected_path}")
-                return expected_path
-            
-            print(f"Downloading audio for: {info.get('title', video_id)}")
-            ydl.download([link])
-            
-            if os.path.exists(expected_path):
-                print(f"yt-dlp download successful: {expected_path}")
+            # First extract info to check duration and size
+            try:
+                info = ydl.extract_info(link, download=False)
                 
-                if DRIVE_AVAILABLE:
-                    try:
-                        cache = load_drive_cache()
-                        if video_id not in cache:
-                            file_size = os.path.getsize(expected_path)
-                            file_size_mb = file_size / (1024 * 1024)
-                            
-                            if file_size_mb <= 120:
-                                drive_file_id = upload_to_drive(expected_path, video_id)
-                                if drive_file_id:
-                                    cache[video_id] = {
-                                        "drive_file_id": drive_file_id,
-                                        "uploaded_at": datetime.now().isoformat(),
-                                        "format": "mp3",
-                                        "file_size": file_size,
-                                        "title": info.get('title', 'Unknown')
-                                    }
-                                    save_drive_cache(cache)
-                            else:
-                                print(f"Skipping Drive upload - file size {file_size_mb:.2f} MB exceeds 120MB limit")
-                    except Exception as e:
-                        print(f"Drive upload after yt-dlp failed: {e}")
+                # Check duration - skip if too long (avoid large files)
+                duration = info.get('duration', 0)
+                if duration > 3600:  # Skip if longer than 60 minutes
+                    print(f"Video too long ({duration}s), skipping yt-dlp download")
+                    return None
                 
-                return expected_path
-            else:
-                print("yt-dlp download failed - file not created")
+                # Check filesize if available
+                filesize = info.get('filesize') or info.get('filesize_approx', 0)
+                if filesize and filesize > 100 * 1024 * 1024:  # 100MB limit for audio
+                    print(f"File too large ({filesize/1024/1024:.2f}MB), skipping yt-dlp download")
+                    return None
+                
+                expected_ext = info.get('ext', 'mp3')
+                expected_path = f"{download_folder}/{video_id}.{expected_ext}"
+                
+                if os.path.exists(expected_path):
+                    print(f"yt-dlp file already exists: {expected_path}")
+                    return expected_path
+                
+                print(f"Starting optimized yt-dlp download for {video_id} (duration: {duration}s)")
+                ydl.download([link])
+                
+                # Check for any downloaded file with this video_id
+                for ext in ["mp3", "m4a", "webm", "opus"]:
+                    possible_path = f"{download_folder}/{video_id}.{ext}"
+                    if os.path.exists(possible_path):
+                        file_size = os.path.getsize(possible_path)
+                        print(f"yt-dlp download successful: {possible_path} ({file_size/1024/1024:.2f} MB)")
+                        
+                        # Upload to Drive with size check
+                        if DRIVE_AVAILABLE:
+                            try:
+                                cache = load_drive_cache()
+                                if video_id not in cache:
+                                    file_size_mb = file_size / (1024 * 1024)
+                                    
+                                    if file_size_mb <= 120:
+                                        drive_file_id = upload_to_drive(possible_path, video_id)
+                                        if drive_file_id:
+                                            cache[video_id] = {
+                                                "drive_file_id": drive_file_id,
+                                                "uploaded_at": datetime.now().isoformat(),
+                                                "format": ext,
+                                                "file_size": file_size,
+                                                "title": info.get('title', 'Unknown')
+                                            }
+                                            save_drive_cache(cache)
+                                    else:
+                                        print(f"Skipping Drive upload - file size {file_size_mb:.2f} MB exceeds 120MB limit")
+                            except Exception as e:
+                                print(f"Drive upload after yt-dlp failed: {e}")
+                        
+                        return possible_path
+                
+                print("yt-dlp download failed - no file created")
+                return None
+                
+            except Exception as e:
+                print(f"yt-dlp info extraction failed: {e}")
                 return None
                 
     except Exception as e:
@@ -598,7 +647,15 @@ async def download_song(link: str):
     return None
 
 async def download_video(link: str):
-    video_id = link.split('v=')[-1].split('&')[0]
+    video_id = None
+    if 'v=' in link:
+        video_id = link.split('v=')[-1].split('&')[0]
+    elif 'youtu.be/' in link:
+        video_id = link.split('youtu.be/')[-1].split('?')[0]
+    
+    if not video_id:
+        print("Could not extract video_id from video link")
+        return None
 
     download_folder = "downloads"
     for ext in ["mp4", "webm", "mkv"]:
@@ -609,9 +666,9 @@ async def download_video(link: str):
     if VIDEO_API_URL:
         video_url = f"{VIDEO_API_URL}/video/{video_id}?api={API_KEY}"
         async with aiohttp.ClientSession() as session:
-            for attempt in range(10):
+            for attempt in range(6):  # Increased to 6 attempts
                 try:
-                    async with session.get(video_url) as response:
+                    async with session.get(video_url, timeout=10) as response:
                         if response.status != 200:
                             raise Exception(f"API request failed with status code {response.status}")
                     
@@ -624,15 +681,19 @@ async def download_video(link: str):
                                 raise Exception("API response did not provide a download URL.")
                             break
                         elif status == "downloading":
-                            await asyncio.sleep(8)
+                            print(f"Video API processing... attempt {attempt + 1}")
+                            await asyncio.sleep(5)
                         else:
                             error_msg = data.get("error") or data.get("message") or f"Unexpected status '{status}'"
                             raise Exception(f"API error: {error_msg}")
                 except Exception as e:
-                    print(f"[FAIL] {e}")
-                    return None
+                    print(f"Video API attempt {attempt + 1} failed: {e}")
+                    if attempt == 5:  # After 6 attempts
+                        print("Video API completely failed after 6 attempts")
+                        return None
+                    await asyncio.sleep(2)
             else:
-                print("Max retries reached. Still downloading...")
+                print("Max retries reached for video API.")
                 return None
         
 
@@ -644,7 +705,7 @@ async def download_video(link: str):
                 os.makedirs(download_folder, exist_ok=True)
                 file_path = os.path.join(download_folder, file_name)
 
-                async with session.get(download_url) as file_response:
+                async with session.get(download_url, timeout=30) as file_response:
                     with open(file_path, 'wb') as f:
                         while True:
                             chunk = await file_response.content.read(8192)
@@ -653,11 +714,67 @@ async def download_video(link: str):
                             f.write(chunk)
                     return file_path
             except aiohttp.ClientError as e:
-                print(f"Network or client error occurred while downloading: {e}")
+                print(f"Network or client error occurred while downloading video: {e}")
                 return None
             except Exception as e:
                 print(f"Error occurred while downloading video: {e}")
                 return None
+    
+    # Fallback to optimized yt-dlp for video with 200MB limit
+    print(f"Video API failed, trying optimized yt-dlp for video: {video_id}")
+    cookie_file = cookie_txt_file()
+    
+    try:
+        # VIDEO DOWNLOAD WITH 200MB LIMIT
+        ydl_opts = {
+            "format": "best[height<=480][filesize<200M]/best[height<=720][filesize<200M]/best[height<=480]/best[height<=720]/best",
+            "outtmpl": f"{download_folder}/{video_id}.%(ext)s",
+            "geo_bypass": True,
+            "nocheckcertificate": True,
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 10,
+            "retries": 3,
+            "fragment_retries": 3,
+            "skip_unavailable_fragments": True,
+            "keep_fragments": False,
+            "http_chunk_size": 10485760,
+        }
+        
+        if cookie_file and os.path.exists(cookie_file):
+            ydl_opts["cookiefile"] = cookie_file
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(link, download=False)
+            
+            # Check video duration and size
+            duration = info.get('duration', 0)
+            filesize = info.get('filesize') or info.get('filesize_approx', 0)
+            
+            if duration > 3600:  # 60 minutes limit
+                print(f"Video too long ({duration}s), skipping download")
+                return None
+                
+            if filesize and filesize > 200 * 1024 * 1024:  # 200MB limit
+                print(f"Video too large ({filesize/1024/1024:.2f}MB), skipping download")
+                return None
+            
+            expected_path = f"{download_folder}/{video_id}.{info.get('ext', 'mp4')}"
+            
+            if os.path.exists(expected_path):
+                return expected_path
+                
+            ydl.download([link])
+            
+            if os.path.exists(expected_path):
+                return expected_path
+            else:
+                return None
+                
+    except Exception as e:
+        print(f"yt-dlp video fallback failed: {e}")
+        return None
+        
     return None
 
 async def check_file_size(link):
@@ -738,10 +855,20 @@ class YouTubeAPI:
     async def exists(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
             link = self.base + link
-        if re.search(self.regex, link):
-            return True
-        else:
-            return False
+            
+        # Enhanced YouTube URL validation
+        youtube_patterns = [
+            r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/',
+            r'youtube\.com/watch\?v=',
+            r'youtu\.be/',
+            r'youtube\.com/embed/',
+            r'youtube\.com/shorts/'
+        ]
+        
+        for pattern in youtube_patterns:
+            if re.search(pattern, link, re.IGNORECASE):
+                return True
+        return False
 
     async def url(self, message_1: Message) -> Union[str, None]:
         messages = [message_1]
@@ -772,6 +899,11 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
+        
+        # Enhanced YouTube link handling
+        if 'youtube.com/shorts/' in link:
+            link = link.replace('youtube.com/shorts/', 'youtube.com/watch?v=')
+            
         results = VideosSearch(link, limit=1)
         for result in (await results.next())["result"]:
             title = result["title"]
@@ -789,6 +921,10 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
+            
+        if 'youtube.com/shorts/' in link:
+            link = link.replace('youtube.com/shorts/', 'youtube.com/watch?v=')
+            
         results = VideosSearch(link, limit=1)
         for result in (await results.next())["result"]:
             title = result["title"]
@@ -799,6 +935,10 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
+            
+        if 'youtube.com/shorts/' in link:
+            link = link.replace('youtube.com/shorts/', 'youtube.com/watch?v=')
+            
         results = VideosSearch(link, limit=1)
         for result in (await results.next())["result"]:
             duration = result["duration"]
@@ -809,6 +949,10 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
+            
+        if 'youtube.com/shorts/' in link:
+            link = link.replace('youtube.com/shorts/', 'youtube.com/watch?v=')
+            
         results = VideosSearch(link, limit=1)
         for result in (await results.next())["result"]:
             thumbnail = result["thumbnails"][0]["url"].split("?")[0]
@@ -819,8 +963,10 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
+            
+        if 'youtube.com/shorts/' in link:
+            link = link.replace('youtube.com/shorts/', 'youtube.com/watch?v=')
         
-        # Try video API first
         try:
             downloaded_file = await download_video(link)
             if downloaded_file:
@@ -828,29 +974,24 @@ class YouTubeAPI:
         except Exception as e:
             print(f"Video API failed: {e}")
         
-        # FIXED: YouTube direct link extraction with proper format
         cookie_file = cookie_txt_file()
         if not cookie_file:
             return 0, "No cookies found. Cannot download video."
-        
-        # CRITICAL FIX: Get direct streamable URL with proper format selection
+            
         proc = await asyncio.create_subprocess_exec(
             "yt-dlp",
             "--cookies", cookie_file,
-            "-f", "best[height<=?720][width<=?1280][ext=mp4]/best[height<=?720][width<=?1280]",
             "-g",
-            link,
+            "-f",
+            "best[height<=?720][width<=?1280][filesize<200M]/best[height<=?720][width<=?1280]/best",
+            f"{link}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
-        
         if stdout:
-            video_url = stdout.decode().strip().split("\n")[0]
-            print(f"Got YouTube direct link: {video_url[:100]}...")
-            return 1, video_url
+            return 1, stdout.decode().split("\n")[0]
         else:
-            print(f"Failed to get YouTube link: {stderr.decode()}")
             return 0, stderr.decode()
 
     async def playlist(self, link, limit, user_id, videoid: Union[bool, str] = None):
@@ -880,6 +1021,10 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
+            
+        if 'youtube.com/shorts/' in link:
+            link = link.replace('youtube.com/shorts/', 'youtube.com/watch?v=')
+            
         results = VideosSearch(link, limit=1)
         for result in (await results.next())["result"]:
             title = result["title"]
@@ -901,13 +1046,16 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
+            
+        if 'youtube.com/shorts/' in link:
+            link = link.replace('youtube.com/shorts/', 'youtube.com/watch?v=')
         
         cookie_file = cookie_txt_file()
         if not cookie_file:
             return [], link
             
         ytdl_opts = {"quiet": True, "cookiefile" : cookie_file}
-        ydl = yt_dlp.YoutubeDL(ytdl_opts)
+        ydl = yt_dlp.YoutubeDL(ydl_opts)
         with ydl:
             formats_available = []
             r = ydl.extract_info(link, download=False)
@@ -947,6 +1095,10 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
+            
+        if 'youtube.com/shorts/' in link:
+            link = link.replace('youtube.com/shorts/', 'youtube.com/watch?v=')
+            
         a = VideosSearch(link, limit=10)
         result = (await a.next()).get("result")
         title = result[query_type]["title"]
@@ -968,31 +1120,32 @@ class YouTubeAPI:
     ) -> str:
         if videoid:
             link = self.base + link
+            
+        # Enhanced YouTube link handling
+        if 'youtube.com/shorts/' in link:
+            link = link.replace('youtube.com/shorts/', 'youtube.com/watch?v=')
+            
         loop = asyncio.get_running_loop()
         
         def audio_dl():
             cookie_file = cookie_txt_file()
             if not cookie_file:
                 raise Exception("No cookies found. Cannot download audio.")
-            
-            # CRITICAL FIX: Proper audio-only format
+                
             ydl_optssx = {
-                "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+                "format": "bestaudio[filesize<100M]/bestaudio/best",
                 "outtmpl": "downloads/%(id)s.%(ext)s",
                 "geo_bypass": True,
                 "nocheckcertificate": True,
                 "quiet": True,
+                "cookiefile" : cookie_file,
                 "no_warnings": True,
-                "cookiefile": cookie_file,
-                "postprocessors": [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }],
+                "socket_timeout": 10,
+                "retries": 3,
             }
             x = yt_dlp.YoutubeDL(ydl_optssx)
             info = x.extract_info(link, False)
-            xyz = os.path.join("downloads", f"{info['id']}.mp3")
+            xyz = os.path.join("downloads", f"{info['id']}.{info['ext']}")
             if os.path.exists(xyz):
                 return xyz
             x.download([link])
@@ -1002,16 +1155,17 @@ class YouTubeAPI:
             cookie_file = cookie_txt_file()
             if not cookie_file:
                 raise Exception("No cookies found. Cannot download video.")
-            
-            # FIXED: Proper video format without DASH fragments
+                
             ydl_optssx = {
-                "format": "best[height<=?720][width<=?1280][ext=mp4]/best[height<=?720][width<=?1280]",
+                "format": "(bestvideo[height<=?720][width<=?1280][filesize<200M][ext=mp4])+(bestaudio[ext=m4a])",
                 "outtmpl": "downloads/%(id)s.%(ext)s",
                 "geo_bypass": True,
                 "nocheckcertificate": True,
                 "quiet": True,
+                "cookiefile" : cookie_file,
                 "no_warnings": True,
-                "cookiefile": cookie_file,
+                "socket_timeout": 10,
+                "retries": 3,
             }
             x = yt_dlp.YoutubeDL(ydl_optssx)
             info = x.extract_info(link, False)
@@ -1035,9 +1189,10 @@ class YouTubeAPI:
                 "nocheckcertificate": True,
                 "quiet": True,
                 "no_warnings": True,
-                "cookiefile": cookie_file,
+                "cookiefile" : cookie_file,
                 "prefer_ffmpeg": True,
                 "merge_output_format": "mp4",
+                "socket_timeout": 10,
             }
             x = yt_dlp.YoutubeDL(ydl_optssx)
             x.download([link])
@@ -1055,7 +1210,7 @@ class YouTubeAPI:
                 "nocheckcertificate": True,
                 "quiet": True,
                 "no_warnings": True,
-                "cookiefile": cookie_file,
+                "cookiefile" : cookie_file,
                 "prefer_ffmpeg": True,
                 "postprocessors": [
                     {
@@ -1064,6 +1219,7 @@ class YouTubeAPI:
                         "preferredquality": "192",
                     }
                 ],
+                "socket_timeout": 10,
             }
             x = yt_dlp.YoutubeDL(ydl_optssx)
             x.download([link])
@@ -1075,7 +1231,6 @@ class YouTubeAPI:
             result = await download_song(link)
             return result
         elif video:
-            # Try video API first
             try:
                 downloaded_file = await download_video(link)
                 if downloaded_file:
@@ -1088,44 +1243,39 @@ class YouTubeAPI:
             if not cookie_file:
                 print("No cookies found. Cannot download video.")
                 return None, None
-            
-            # Check if direct stream is enabled
+                
             if await is_on_off(1):
                 direct = True
                 downloaded_file = await download_song(link)
             else:
-                # FIXED: Get YouTube direct link with proper format
                 proc = await asyncio.create_subprocess_exec(
                     "yt-dlp",
                     "--cookies", cookie_file,
-                    "-f", "best[height<=?720][width<=?1280][ext=mp4]/best[height<=?720][width<=?1280]",
                     "-g",
-                    link,
+                    "-f",
+                    "best[height<=?720][width<=?1280][filesize<200M]/best[height<=?720][width<=?1280]/best",
+                    f"{link}",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, stderr = await proc.communicate()
-                
                 if stdout:
-                    downloaded_file = stdout.decode().strip().split("\n")[0]
+                    downloaded_file = stdout.decode().split("\n")[0]
                     direct = False
-                    print(f"Got direct YouTube link for streaming")
                 else:
-                    # Fallback to download
-                    file_size = await check_file_size(link)
-                    if not file_size:
-                        print("None file Size")
-                        return None, None
-                    total_size_mb = file_size / (1024 * 1024)
-                    if total_size_mb > 250:
-                        print(f"File size {total_size_mb:.2f} MB exceeds the 250MB limit.")
-                        return None, None
-                    direct = True
-                    downloaded_file = await loop.run_in_executor(None, video_dl)
+                   file_size = await check_file_size(link)
+                   if not file_size:
+                     print("None file Size")
+                     return None, None
+                   total_size_mb = file_size / (1024 * 1024)
+                   if total_size_mb > 500:  # Increased limit for video
+                     print(f"File size {total_size_mb:.2f} MB exceeds the 500MB limit.")
+                     return None, None
+                   direct = True
+                   downloaded_file = await loop.run_in_executor(None, video_dl)
         else:
             direct = True
             downloaded_file = await download_song(link)
-        
         return downloaded_file, direct
 
 
@@ -1174,6 +1324,7 @@ async def cleanup_cache():
             return False
             
         cleaned_count = 0
+        # Clean invalid cache entries
         for video_id, entry in list(cache.items()):
             drive_file_id = entry.get("drive_file_id")
             if not drive_file_id:
@@ -1186,6 +1337,7 @@ async def cleanup_cache():
                 del cache[video_id]
                 cleaned_count += 1
         
+        # Clean duplicate files in Drive
         duplicate_cleaned = 0
         for video_id in cache:
             if cleanup_duplicate_files(video_id):
