@@ -33,9 +33,9 @@ try:
 except ImportError:
     DRIVE_AVAILABLE = False
  
-CLIENT_SECRET_PATH = "ShrutixMusic/assets/client_secret.json"
-TOKEN_PATH = "ShrutixMusic/assets/token.json"
-DRIVE_CACHE_PATH = "ShrutixMusic/assets/drive_cache.json"
+CLIENT_SECRET_PATH = "ShrutiMusic/assets/client_secret.json"
+TOKEN_PATH = "ShrutiMusic/assets/token.json"
+DRIVE_CACHE_PATH = "ShrutiMusic/assets/drive_cache.json"
 METADATA_DRIVE_FILENAME = "music_metadata.json"
 DRIVE_FOLDER_ID = None
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
