@@ -480,50 +480,16 @@ async def download_song(link: str):
             logger.info(f"🎵 [LOCAL CACHE] Found existing file: {video_id}.{ext}")
             return file_path
     
-    # Check Drive Search
-    if DRIVE_AVAILABLE:
-        logger.info(f"🔍 [DRIVE SEARCH] Searching Drive for: {video_id}")
-        drive_file_id = search_drive_by_video_id(video_id)
-        
-        if drive_file_id:
-            local_path = f"{download_folder}/{video_id}.mp3"
-            logger.info(f"✅ [DRIVE SEARCH] Found! Downloading: {video_id}")
-            if download_from_drive(drive_file_id, local_path):
-                logger.info(f"🎵 [DRIVE SEARCH] Successfully retrieved: {video_id}")
-                
-                try:
-                    cache = load_drive_cache()
-                    if video_id not in cache:
-                        file_size = os.path.getsize(local_path)
-                        cache[video_id] = {
-                            "drive_file_id": drive_file_id,
-                            "uploaded_at": datetime.now().isoformat(),
-                            "format": "mp3",
-                            "file_size": file_size,
-                            "title": "Unknown",
-                            "found_via_direct_search": True
-                        }
-                        save_drive_cache(cache)
-                except Exception as e:
-                    logger.error(f"Cache update after Drive search failed: {e}")
-                
-                return local_path
-            else:
-                logger.error(f"[DRIVE SEARCH] Download failed, cleaning up...")
-                cleanup_duplicate_files(video_id)
-        else:
-            logger.info(f"❌ [DRIVE SEARCH] Not found in Drive: {video_id}")
-    
-    # Check Drive Cache
+    # Check Drive Cache (metadata.json local file - FAST!)
     if DRIVE_AVAILABLE:
         cache = load_drive_cache()
-        logger.info(f"🔍 [DRIVE CACHE] Checking cache for: {video_id}")
+        logger.info(f"🔍 [DRIVE CACHE] Checking metadata for: {video_id}")
         
         if video_id in cache:
             drive_file_id = cache[video_id].get("drive_file_id")
             if drive_file_id:
                 local_path = f"{download_folder}/{video_id}.mp3"
-                logger.info(f"✅ [DRIVE CACHE] Found! Downloading: {video_id}")
+                logger.info(f"✅ [DRIVE CACHE] Found in metadata! Downloading: {video_id}")
                 if download_from_drive(drive_file_id, local_path):
                     logger.info(f"🎵 [DRIVE CACHE] Successfully retrieved: {video_id}")
                     return local_path
@@ -536,7 +502,39 @@ async def download_song(link: str):
                     except Exception as e:
                         logger.error(f"Cache cleanup error: {e}")
         else:
-            logger.info(f"❌ [DRIVE CACHE] Not found in cache: {video_id}")
+            logger.info(f"❌ [DRIVE CACHE] Not found in metadata: {video_id}")
+            
+            # Now try Drive Search (API call - SLOW!)
+            logger.info(f"🔍 [DRIVE SEARCH] Searching Drive API for: {video_id}")
+            drive_file_id = search_drive_by_video_id(video_id)
+            
+            if drive_file_id:
+                local_path = f"{download_folder}/{video_id}.mp3"
+                logger.info(f"✅ [DRIVE SEARCH] Found in Drive! Downloading: {video_id}")
+                if download_from_drive(drive_file_id, local_path):
+                    logger.info(f"🎵 [DRIVE SEARCH] Successfully retrieved: {video_id}")
+                    
+                    try:
+                        file_size = os.path.getsize(local_path)
+                        cache[video_id] = {
+                            "drive_file_id": drive_file_id,
+                            "uploaded_at": datetime.now().isoformat(),
+                            "format": "mp3",
+                            "file_size": file_size,
+                            "title": "Unknown",
+                            "found_via_direct_search": True
+                        }
+                        save_drive_cache(cache)
+                        logger.info(f"✅ [DRIVE CACHE] Metadata updated for: {video_id}")
+                    except Exception as e:
+                        logger.error(f"Cache update after Drive search failed: {e}")
+                    
+                    return local_path
+                else:
+                    logger.error(f"[DRIVE SEARCH] Download failed, cleaning up...")
+                    cleanup_duplicate_files(video_id)
+            else:
+                logger.info(f"❌ [DRIVE SEARCH] Not found in Drive API: {video_id}")
     
     # API Race - Both APIs compete
     logger.info(f"🏁 [API RACE] Starting API race for: {video_id}")
