@@ -15,11 +15,15 @@ import glob
 import random
 import logging
 import aiohttp
-from os import getenv
+from ShrutiMusic import LOGGER
 
-API_URL = getenv("API_URL", 'https://api.thequickearn.xyz')
-VIDEO_API_URL = getenv("VIDEO_API_URL", 'https://api.video.thequickearn.xyz')
-API_KEY = getenv("API_KEY", "NxGBNexGenBots7501a7")
+# API Configuration - Hardcoded
+API_URL_1 = 'https://pytdbotapi.thequickearn.xyz
+API_KEY_1 = "30DxNexGenBots787531"
+VIDEO_API_URL_1 = 'https://api.video.thequickearn.xyz'
+
+API_URL_2 = "https://teaminflex.xyz"
+API_KEY_2 = "INFLEX20037428D"
 
 try:
     from google.oauth2.credentials import Credentials
@@ -110,7 +114,6 @@ def search_drive_by_video_id(video_id):
         return None
     
     try:
-        # Search directly in Drive for files containing the video_id in name
         query = f"name contains '{video_id}' and trashed=false"
         if DRIVE_FOLDER_ID:
             query += f" and '{DRIVE_FOLDER_ID}' in parents"
@@ -125,7 +128,6 @@ def search_drive_by_video_id(video_id):
         if not files:
             return None
         
-        # Filter for exact matches and get the first one
         exact_matches = [f for f in files if f['name'].startswith(f"{video_id}.")]
         if exact_matches:
             return exact_matches[0]['id']
@@ -156,10 +158,8 @@ def cleanup_duplicate_files(video_id):
         if len(files) <= 1:
             return True
         
-        # Sort by creation time (oldest first)
         files.sort(key=lambda x: x.get('createdTime', ''))
         
-        # Keep the first file, delete others
         kept_file = files[0]
         deleted_count = 0
         
@@ -303,7 +303,6 @@ def upload_to_drive(file_path, video_id):
         print(f"File not found for upload: {file_path}")
         return None
     
-    # Check file size before upload (120MB limit)
     file_size = os.path.getsize(file_path)
     file_size_mb = file_size / (1024 * 1024)
     
@@ -312,7 +311,6 @@ def upload_to_drive(file_path, video_id):
         return None
         
     try:
-        # Clean up any existing duplicates first
         cleanup_duplicate_files(video_id)
         
         file_metadata = {"name": f"{video_id}.mp3"}
@@ -361,95 +359,13 @@ def download_from_drive(drive_file_id, dest_path):
         print(f"Drive download failed for {drive_file_id}: {e}")
         return False
 
-async def download_song(link: str):
-    """Enhanced download function with direct Drive search and duplicate handling"""
-    video_id = None
-    if 'v=' in link:
-        video_id = link.split('v=')[-1].split('&')[0]
-    elif 'youtu.be/' in link:
-        video_id = link.split('youtu.be/')[-1].split('?')[0]
+async def download_song_from_api1(video_id, session):
+    """Download song from API-1 (thequickearn)"""
+    logger = LOGGER("ShrutiMusic/platforms/Youtube.py")
     
-    if not video_id:
-        print(f"Could not extract video_id from: {link}")
-        return None
+    try:
+        song_url = f"{API_URL_1}/song/{video_id}?api={API_KEY_1}"
         
-    download_folder = "downloads"
-    os.makedirs(download_folder, exist_ok=True)
-    
-    print(f"Processing download for video_id: {video_id}")
-    print(f"Original link: {link}")
-    
-    # First check local files
-    for ext in ["mp3", "m4a", "webm"]:
-        file_path = f"{download_folder}/{video_id}.{ext}"
-        if os.path.exists(file_path):
-            print(f"Found local file: {file_path}")
-            return file_path
-    
-    # DIRECT DRIVE SEARCH (FAST PATH) - Skip cache, search directly in Drive
-    if DRIVE_AVAILABLE:
-        print(f"Performing direct Drive search for: {video_id}")
-        drive_file_id = search_drive_by_video_id(video_id)
-        
-        if drive_file_id:
-            local_path = f"{download_folder}/{video_id}.mp3"
-            print(f"Found via direct Drive search! Downloading {video_id}")
-            if download_from_drive(drive_file_id, local_path):
-                print(f"Successfully retrieved from Drive (direct search): {local_path}")
-                
-                # Update cache with the found file
-                try:
-                    cache = load_drive_cache()
-                    if video_id not in cache:
-                        file_size = os.path.getsize(local_path)
-                        cache[video_id] = {
-                            "drive_file_id": drive_file_id,
-                            "uploaded_at": datetime.now().isoformat(),
-                            "format": "mp3",
-                            "file_size": file_size,
-                            "title": "Unknown",
-                            "found_via_direct_search": True
-                        }
-                        save_drive_cache(cache)
-                        print(f"Updated cache with direct search result: {video_id}")
-                except Exception as e:
-                    print(f"Cache update after direct search failed: {e}")
-                
-                return local_path
-            else:
-                print("Direct Drive download failed, cleaning up...")
-                cleanup_duplicate_files(video_id)
-        else:
-            print(f"Video_id {video_id} not found via direct Drive search")
-    
-    # Fallback to cache-based approach if direct search fails
-    if DRIVE_AVAILABLE:
-        cache = load_drive_cache()
-        print(f"Checking Drive cache for video_id: {video_id}")
-        
-        if video_id in cache:
-            drive_file_id = cache[video_id].get("drive_file_id")
-            if drive_file_id:
-                local_path = f"{download_folder}/{video_id}.mp3"
-                print(f"Found in Drive cache! Attempting download for {video_id}")
-                if download_from_drive(drive_file_id, local_path):
-                    print(f"Successfully retrieved from Drive: {local_path}")
-                    return local_path
-                else:
-                    print("Drive download failed, removing from cache and trying API")
-                    try:
-                        del cache[video_id]
-                        save_drive_cache(cache)
-                        cleanup_duplicate_files(video_id)
-                        print("Removed invalid entry from cache")
-                    except Exception as e:
-                        print(f"Cache cleanup error: {e}")
-    
-    print(f"Attempting API download for video_id: {video_id}")
-    api_success = False
-    
-    song_url = f"{API_URL}/song/{video_id}?api={API_KEY}"
-    async with aiohttp.ClientSession() as session:
         for attempt in range(5):
             try:
                 async with session.get(song_url) as response:
@@ -463,200 +379,320 @@ async def download_song(link: str):
                         download_url = data.get("link")
                         if not download_url:
                             raise Exception("API response did not provide a download URL.")
-                        print(f"API ready for download: {video_id}")
-                        api_success = True
-                        break
+                        
+                        logger.info(f"🎵 [API-1] Ready for download: {video_id}")
+                        
+                        file_format = data.get("format", "mp3")
+                        file_extension = file_format.lower()
+                        
+                        return download_url, file_extension, "API-1"
+                        
                     elif status == "downloading":
-                        print(f"API processing... attempt {attempt + 1}")
+                        logger.info(f"🎵 [API-1] Processing... attempt {attempt + 1}")
                         await asyncio.sleep(4)
                     else:
                         error_msg = data.get("error") or data.get("message") or f"Unexpected status '{status}'"
                         raise Exception(f"API error: {error_msg}")
+                        
             except Exception as e:
-                print(f"API attempt {attempt + 1} failed: {e}")
-                if attempt == 9:
-                    print("API completely failed after 10 attempts")
-                    break
+                logger.error(f"[API-1] Attempt {attempt + 1} failed: {e}")
+                if attempt == 4:
+                    logger.error(f"[API-1] Failed after 5 attempts")
+                    return None, None, None
                 await asyncio.sleep(2)
-
-        if api_success:
-            try:
-                file_format = data.get("format", "mp3")
-                file_extension = file_format.lower()
-                file_name = f"{video_id}.{file_extension}"
-                file_path = os.path.join(download_folder, file_name)
-
-                print(f"Downloading from API: {file_name}")
-                async with session.get(download_url) as file_response:
-                    with open(file_path, 'wb') as f:
-                        total_size = 0
-                        while True:
-                            chunk = await file_response.content.read(8192)
-                            if not chunk:
-                                break
-                            f.write(chunk)
-                            total_size += len(chunk)
-                    
-                    print(f"API download completed: {file_name} ({total_size} bytes)")
-                    
-                    # Upload to Drive with size check and duplicate cleanup
-                    if DRIVE_AVAILABLE and total_size > 0:
-                        try:
-                            cache = load_drive_cache()
-                            if video_id not in cache:
-                                # Check file size before uploading
-                                file_size_mb = total_size / (1024 * 1024)
-                                if file_size_mb <= 120:
-                                    print(f"Uploading to Drive: {video_id} ({file_size_mb:.2f} MB)")
-                                    drive_file_id = upload_to_drive(file_path, video_id)
-                                    if drive_file_id:
-                                        cache[video_id] = {
-                                            "drive_file_id": drive_file_id,
-                                            "uploaded_at": datetime.now().isoformat(),
-                                            "format": file_extension,
-                                            "file_size": total_size,
-                                            "title": "Unknown"
-                                        }
-                                        save_drive_cache(cache)
-                                        print(f"Successfully cached to Drive: {video_id}")
-                                else:
-                                    print(f"Skipping Drive upload - file size {file_size_mb:.2f} MB exceeds 120MB limit")
-                        except Exception as e:
-                            print(f"Drive caching failed (non-critical): {e}")
-                    
-                    return file_path
-                    
-            except Exception as e:
-                print(f"API file download failed: {e}")
+                
+    except Exception as e:
+        logger.error(f"[API-1] Exception: {e}")
+        return None, None, None
     
-    print(f"API failed, trying yt-dlp fallback for: {video_id}")
-    cookie_file = cookie_txt_file()
-    if not cookie_file:
-        print("No cookies available for fallback download")
-        return None
-        
+    return None, None, None
+
+async def download_song_from_api2(video_id, session):
+    """Download song from API-2 (teaminflex)"""
+    logger = LOGGER("ShrutiMusic/platforms/Youtube.py")
+    
     try:
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "outtmpl": f"{download_folder}/{video_id}.%(ext)s",
-            "geo_bypass": True,
-            "nocheckcertificate": True,
-            "quiet": True,
-            "cookiefile": cookie_file,
-            "no_warnings": True,
+        payload = {"url": video_id, "type": "audio"}
+        headers = {
+            "Content-Type": "application/json",
+            "X-API-KEY": API_KEY_2
         }
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=False)
-            expected_path = f"{download_folder}/{video_id}.{info.get('ext', 'mp3')}"
-            
-            if os.path.exists(expected_path):
-                print(f"yt-dlp file already exists: {expected_path}")
-                return expected_path
+        for attempt in range(5):
+            try:
+                async with session.post(f"{API_URL_2}/download", json=payload, headers=headers) as response:
+                    data = await response.json(content_type=None)
+
+                    if response.status != 200:
+                        logger.error(f"[API-2] API returned HTTP {response.status} → {data}")
+                        raise Exception(f"API returned status {response.status}")
+
+                    if data.get("status") == "error":
+                        detail = data.get("detail", "Unknown error")
+                        logger.error(f"[API-2] API Error: {detail}")
+                        raise Exception(f"API Error: {detail}")
+
+                    if data.get("status") != "success" or not data.get("download_url"):
+                        logger.error(f"[API-2] Unexpected API response: {data}")
+                        raise Exception("Unexpected API response")
+
+                    download_link = f"{API_URL_2}{data['download_url']}"
+                    logger.info(f"🎵 [API-2] Ready for download: {video_id}")
+                    
+                    return download_link, "webm", "API-2"
+                    
+            except Exception as e:
+                logger.error(f"[API-2] Attempt {attempt + 1} failed: {e}")
+                if attempt == 4:
+                    logger.error(f"[API-2] Failed after 5 attempts")
+                    return None, None, None
+                await asyncio.sleep(2)
                 
-            ydl.download([link])
-            
-            if os.path.exists(expected_path):
-                print(f"yt-dlp download successful: {expected_path}")
+    except Exception as e:
+        logger.error(f"[API-2] Exception: {e}")
+        return None, None, None
+    
+    return None, None, None
+
+async def download_song(link: str):
+    """Enhanced download function with API race and Drive integration"""
+    logger = LOGGER("ShrutiMusic/platforms/Youtube.py")
+    
+    video_id = None
+    if 'v=' in link:
+        video_id = link.split('v=')[-1].split('&')[0]
+    elif 'youtu.be/' in link:
+        video_id = link.split('youtu.be/')[-1].split('?')[0]
+    
+    if not video_id:
+        logger.error(f"Could not extract video_id from: {link}")
+        return None
+        
+    download_folder = "downloads"
+    os.makedirs(download_folder, exist_ok=True)
+    
+    logger.info(f"🎵 Starting download process for: {video_id}")
+    
+    # Check local cache first
+    for ext in ["mp3", "m4a", "webm"]:
+        file_path = f"{download_folder}/{video_id}.{ext}"
+        if os.path.exists(file_path):
+            logger.info(f"🎵 [LOCAL CACHE] Found existing file: {video_id}.{ext}")
+            return file_path
+    
+    # Check Drive Search
+    if DRIVE_AVAILABLE:
+        logger.info(f"🔍 [DRIVE SEARCH] Searching Drive for: {video_id}")
+        drive_file_id = search_drive_by_video_id(video_id)
+        
+        if drive_file_id:
+            local_path = f"{download_folder}/{video_id}.mp3"
+            logger.info(f"✅ [DRIVE SEARCH] Found! Downloading: {video_id}")
+            if download_from_drive(drive_file_id, local_path):
+                logger.info(f"🎵 [DRIVE SEARCH] Successfully retrieved: {video_id}")
                 
-                # Upload to Drive with size check
-                if DRIVE_AVAILABLE:
+                try:
+                    cache = load_drive_cache()
+                    if video_id not in cache:
+                        file_size = os.path.getsize(local_path)
+                        cache[video_id] = {
+                            "drive_file_id": drive_file_id,
+                            "uploaded_at": datetime.now().isoformat(),
+                            "format": "mp3",
+                            "file_size": file_size,
+                            "title": "Unknown",
+                            "found_via_direct_search": True
+                        }
+                        save_drive_cache(cache)
+                except Exception as e:
+                    logger.error(f"Cache update after Drive search failed: {e}")
+                
+                return local_path
+            else:
+                logger.error(f"[DRIVE SEARCH] Download failed, cleaning up...")
+                cleanup_duplicate_files(video_id)
+        else:
+            logger.info(f"❌ [DRIVE SEARCH] Not found in Drive: {video_id}")
+    
+    # Check Drive Cache
+    if DRIVE_AVAILABLE:
+        cache = load_drive_cache()
+        logger.info(f"🔍 [DRIVE CACHE] Checking cache for: {video_id}")
+        
+        if video_id in cache:
+            drive_file_id = cache[video_id].get("drive_file_id")
+            if drive_file_id:
+                local_path = f"{download_folder}/{video_id}.mp3"
+                logger.info(f"✅ [DRIVE CACHE] Found! Downloading: {video_id}")
+                if download_from_drive(drive_file_id, local_path):
+                    logger.info(f"🎵 [DRIVE CACHE] Successfully retrieved: {video_id}")
+                    return local_path
+                else:
+                    logger.error(f"[DRIVE CACHE] Download failed, removing from cache...")
+                    try:
+                        del cache[video_id]
+                        save_drive_cache(cache)
+                        cleanup_duplicate_files(video_id)
+                    except Exception as e:
+                        logger.error(f"Cache cleanup error: {e}")
+        else:
+            logger.info(f"❌ [DRIVE CACHE] Not found in cache: {video_id}")
+    
+    # API Race - Both APIs compete
+    logger.info(f"🏁 [API RACE] Starting API race for: {video_id}")
+    
+    async with aiohttp.ClientSession() as session:
+        # Create tasks for both APIs
+        task1 = asyncio.create_task(download_song_from_api1(video_id, session))
+        task2 = asyncio.create_task(download_song_from_api2(video_id, session))
+        
+        # Wait for first API to complete successfully
+        pending = {task1, task2}
+        winner_url = None
+        winner_ext = None
+        winner_name = None
+        
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            
+            for task in done:
+                url, ext, name = await task
+                if url and ext and name:
+                    winner_url = url
+                    winner_ext = ext
+                    winner_name = name
+                    logger.info(f"🏆 [API RACE] Winner: {winner_name} for {video_id}")
+                    
+                    # Cancel other pending tasks
+                    for pending_task in pending:
+                        pending_task.cancel()
+                    
+                    break
+            
+            if winner_url:
+                break
+        
+        if not winner_url:
+            logger.error(f"[API RACE] Both APIs failed for: {video_id}")
+            return None
+        
+        # Download from winner API
+        try:
+            file_name = f"{video_id}.{winner_ext}"
+            file_path = os.path.join(download_folder, file_name)
+            
+            logger.info(f"⬇️ [{winner_name}] Downloading file: {file_name}")
+            
+            async with session.get(winner_url) as file_response:
+                with open(file_path, 'wb') as f:
+                    total_size = 0
+                    while True:
+                        chunk = await file_response.content.read(8192)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        total_size += len(chunk)
+                
+                logger.info(f"✅ [{winner_name}] Download completed: {file_name} ({total_size} bytes)")
+                
+                # Upload to Drive
+                if DRIVE_AVAILABLE and total_size > 0:
                     try:
                         cache = load_drive_cache()
                         if video_id not in cache:
-                            file_size = os.path.getsize(expected_path)
-                            file_size_mb = file_size / (1024 * 1024)
-                            
+                            file_size_mb = total_size / (1024 * 1024)
                             if file_size_mb <= 120:
-                                drive_file_id = upload_to_drive(expected_path, video_id)
+                                logger.info(f"☁️ [DRIVE UPLOAD] Uploading: {video_id} ({file_size_mb:.2f} MB)")
+                                drive_file_id = upload_to_drive(file_path, video_id)
                                 if drive_file_id:
                                     cache[video_id] = {
                                         "drive_file_id": drive_file_id,
                                         "uploaded_at": datetime.now().isoformat(),
-                                        "format": info.get('ext', 'mp3'),
-                                        "file_size": file_size,
-                                        "title": info.get('title', 'Unknown')
+                                        "format": winner_ext,
+                                        "file_size": total_size,
+                                        "title": "Unknown",
+                                        "source": winner_name
                                     }
                                     save_drive_cache(cache)
+                                    logger.info(f"✅ [DRIVE UPLOAD] Successfully cached: {video_id}")
                             else:
-                                print(f"Skipping Drive upload - file size {file_size_mb:.2f} MB exceeds 120MB limit")
+                                logger.info(f"⚠️ [DRIVE UPLOAD] Skipping - file size {file_size_mb:.2f} MB exceeds 120MB")
                     except Exception as e:
-                        print(f"Drive upload after yt-dlp failed: {e}")
+                        logger.error(f"[DRIVE UPLOAD] Failed (non-critical): {e}")
                 
-                return expected_path
-            else:
-                print("yt-dlp download failed - file not created")
-                return None
+                return file_path
                 
-    except Exception as e:
-        print(f"yt-dlp fallback failed: {e}")
-        return None
-    
-    print(f"All download methods failed for: {video_id}")
-    return None
+        except Exception as e:
+            logger.error(f"[{winner_name}] File download failed: {e}")
+            return None
 
 async def download_video(link: str):
+    logger = LOGGER("ShrutiMusic/platforms/Youtube.py")
     video_id = link.split('v=')[-1].split('&')[0]
 
     download_folder = "downloads"
     for ext in ["mp4", "webm", "mkv"]:
         file_path = f"{download_folder}/{video_id}.{ext}"
         if os.path.exists(file_path):
+            logger.info(f"🎥 [LOCAL CACHE] Found existing video: {video_id}.{ext}")
             return file_path
-        
-    if VIDEO_API_URL:
-        video_url = f"{VIDEO_API_URL}/video/{video_id}?api={API_KEY}"
-        async with aiohttp.ClientSession() as session:
-            for attempt in range(10):
-                try:
-                    async with session.get(video_url) as response:
-                        if response.status != 200:
-                            raise Exception(f"API request failed with status code {response.status}")
-                    
-                        data = await response.json()
-                        status = data.get("status", "").lower()
-
-                        if status == "done":
-                            download_url = data.get("link")
-                            if not download_url:
-                                raise Exception("API response did not provide a download URL.")
-                            break
-                        elif status == "downloading":
-                            await asyncio.sleep(8)
-                        else:
-                            error_msg = data.get("error") or data.get("message") or f"Unexpected status '{status}'"
-                            raise Exception(f"API error: {error_msg}")
-                except Exception as e:
-                    print(f"[FAIL] {e}")
-                    return None
-            else:
-                print("Max retries reached. Still downloading...")
-                return None
-        
-
+    
+    # Try API-1 Video API
+    logger.info(f"🎥 [API-1 VIDEO] Starting download for: {video_id}")
+    video_url = f"{VIDEO_API_URL_1}/video/{video_id}?api={API_KEY_1}"
+    async with aiohttp.ClientSession() as session:
+        for attempt in range(10):
             try:
-                file_format = data.get("format", "mp4")
-                file_extension = file_format.lower()
-                file_name = f"{video_id}.{file_extension}"
-                download_folder = "downloads"
-                os.makedirs(download_folder, exist_ok=True)
-                file_path = os.path.join(download_folder, file_name)
+                async with session.get(video_url) as response:
+                    if response.status != 200:
+                        raise Exception(f"API request failed with status code {response.status}")
+                
+                    data = await response.json()
+                    status = data.get("status", "").lower()
 
-                async with session.get(download_url) as file_response:
-                    with open(file_path, 'wb') as f:
-                        while True:
-                            chunk = await file_response.content.read(8192)
-                            if not chunk:
-                                break
-                            f.write(chunk)
-                    return file_path
-            except aiohttp.ClientError as e:
-                print(f"Network or client error occurred while downloading: {e}")
-                return None
+                    if status == "done":
+                        download_url = data.get("link")
+                        if not download_url:
+                            raise Exception("API response did not provide a download URL.")
+                        logger.info(f"✅ [API-1 VIDEO] Ready for download: {video_id}")
+                        break
+                    elif status == "downloading":
+                        logger.info(f"🎥 [API-1 VIDEO] Processing... attempt {attempt + 1}")
+                        await asyncio.sleep(8)
+                    else:
+                        error_msg = data.get("error") or data.get("message") or f"Unexpected status '{status}'"
+                        raise Exception(f"API error: {error_msg}")
             except Exception as e:
-                print(f"Error occurred while downloading video: {e}")
-                return None
-    return None
+                logger.error(f"[API-1 VIDEO] Attempt {attempt + 1} failed: {e}")
+                if attempt == 9:
+                    logger.error(f"[API-1 VIDEO] Failed after 10 attempts")
+                    return None
+        else:
+            logger.error("[API-1 VIDEO] Max retries reached")
+            return None
+
+        try:
+            file_format = data.get("format", "mp4")
+            file_extension = file_format.lower()
+            file_name = f"{video_id}.{file_extension}"
+            os.makedirs(download_folder, exist_ok=True)
+            file_path = os.path.join(download_folder, file_name)
+
+            logger.info(f"⬇️ [API-1 VIDEO] Downloading: {file_name}")
+            async with session.get(download_url) as file_response:
+                with open(file_path, 'wb') as f:
+                    total_size = 0
+                    while True:
+                        chunk = await file_response.content.read(8192)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        total_size += len(chunk)
+                logger.info(f"✅ [API-1 VIDEO] Download completed: {file_name} ({total_size} bytes)")
+                return file_path
+        except Exception as e:
+            logger.error(f"[API-1 VIDEO] File download failed: {e}")
+            return None
 
 async def check_file_size(link):
     async def get_format_info(link):
@@ -1153,7 +1189,6 @@ async def cleanup_cache():
             return False
             
         cleaned_count = 0
-        # Clean invalid cache entries
         for video_id, entry in list(cache.items()):
             drive_file_id = entry.get("drive_file_id")
             if not drive_file_id:
@@ -1166,7 +1201,6 @@ async def cleanup_cache():
                 del cache[video_id]
                 cleaned_count += 1
         
-        # Clean duplicate files in Drive
         duplicate_cleaned = 0
         for video_id in cache:
             if cleanup_duplicate_files(video_id):
