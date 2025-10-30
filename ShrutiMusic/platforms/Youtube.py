@@ -19,7 +19,7 @@ from ShrutiMusic import LOGGER
 
 # API Configuration - Hardcoded
 API_URL_1 = 'https://pytdbotapi.thequickearn.xyz'
-API_KEY_1 = "30DxNexGenBots787531"
+API_KEY_1 = "NxGBNexGenBots7501a7"
 VIDEO_API_URL_1 = 'https://api.video.thequickearn.xyz'
 
 API_URL_2 = "https://teaminflex.xyz"
