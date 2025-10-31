@@ -78,16 +78,13 @@ def format_welcome_message(text, user, chat):
 
 # Default welcome message
 DEFAULT_WELCOME_MESSAGE = """
- •●◉✿ ᴡᴇʟᴄᴏᴍᴇ ʙᴀʙʏ ✿◉●•
-▰▱▱▱▱▱▱▱▱▱▱▱▱▱▰
+🌟 <b>ᴡᴇʟᴄᴏᴍᴇ {mention}!</b>
 
-● ɴᴀᴍᴇ ➥  {mention}
-● ᴜsᴇʀɴᴀᴍᴇ ➥  {username}
-● ᴜsᴇʀ ɪᴅ ➥  {user_id}
+📋 <b>ɢʀᴏᴜᴘ:</b> {chat_title}
+🆔 <b>ʏᴏᴜʀ ɪᴅ:</b> <code>{user_id}</code>
+👤 <b>ᴜsᴇʀɴᴀᴍᴇ:</b> {username}
 
-❖ <blockquote><b>❖ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➥ <a href=https://t.me/ShrutixMusic?start=help>Mᴜsɪᴄ's Lᴏᴠᴇ💕😘</a></b></blockquote> ♡゙
-▰▱▱▱▱▱▱▱▱▱▱▱▱▱▰
-"""
+<u>ʜᴏᴘᴇ ʏᴏᴜ ғɪɴᴅ ɢᴏᴏᴅ ᴠɪʙᴇs, ɴᴇᴡ ғʀɪᴇɴᴅs, ᴀɴᴅ ʟᴏᴛs ᴏғ ғᴜɴ ʜᴇʀᴇ!</u> 🌟"""
 
 # ✅ `/welcome` Command: Enable/Disable Special Welcome
 @app.on_message(filters.command("welcome") & ~filters.private)
