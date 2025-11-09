@@ -10,51 +10,71 @@ from youtubesearchpython.__future__ import VideosSearch
 CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
 
+FALLBACK_THUMB = "ShrutiMusic/assets/temp_thumb.jpg"
+
 def changeImageSize(maxWidth, maxHeight, image):
-    ratio = min(maxWidth / image.size[0], maxHeight / image.size[1])
-    newSize = (int(image.size[0] * ratio), int(image.size[1] * ratio))
-    return image.resize(newSize, Image.LANCZOS)
+    try:
+        ratio = min(maxWidth / image.size[0], maxHeight / image.size[1])
+        newSize = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+        return image.resize(newSize, Image.LANCZOS)
+    except Exception as e:
+        print(f"[changeImageSize Error] {e}")
+        return image
 
 def truncate_ellipsis(text, max_chars=20):
-    if len(text) <= max_chars:
-        return text
-    truncated = text[:max_chars]
-    if ' ' in truncated:
-        truncated = truncated[:truncated.rfind(' ')]
-    return truncated + "..." if len(truncated) > 0 else text[:max_chars-3] + "..."
+    try:
+        if len(text) <= max_chars:
+            return text
+        truncated = text[:max_chars]
+        if ' ' in truncated:
+            truncated = truncated[:truncated.rfind(' ')]
+        return truncated + "..." if len(truncated) > 0 else text[:max_chars-3] + "..."
+    except Exception as e:
+        print(f"[truncate_ellipsis Error] {e}")
+        return text[:20] + "..."
 
 def ensure_text_fits(draw, text, font, max_width):
-    text_width = draw.textlength(text, font=font)
-    if text_width <= max_width:
-        return text
-    low = 1
-    high = len(text)
-    best = ""
-    while low <= high:
-        mid = (low + high) // 2
-        truncated = truncate_ellipsis(text, mid)
-        truncated_width = draw.textlength(truncated, font=font)
-        if truncated_width <= max_width:
-            best = truncated
-            low = mid + 1
-        else:
-            high = mid - 1
-    return best if best else "..."
+    try:
+        text_width = draw.textlength(text, font=font)
+        if text_width <= max_width:
+            return text
+        low = 1
+        high = len(text)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            truncated = truncate_ellipsis(text, mid)
+            truncated_width = draw.textlength(truncated, font=font)
+            if truncated_width <= max_width:
+                best = truncated
+                low = mid + 1
+            else:
+                high = mid - 1
+        return best if best else "..."
+    except Exception as e:
+        print(f"[ensure_text_fits Error] {e}")
+        return text[:30] + "..."
 
 def fit_text(draw, text, max_width, font_path, start_size, min_size):
-    size = start_size
-    while size >= min_size:
-        try:
-            font = ImageFont.truetype(font_path, size)
-            if draw.textlength(text, font=font) <= max_width:
-                return font
-        except:
-            pass
-        size -= 1
-    return ImageFont.load_default()
+    try:
+        size = start_size
+        while size >= min_size:
+            try:
+                font = ImageFont.truetype(font_path, size)
+                if draw.textlength(text, font=font) <= max_width:
+                    return font
+            except:
+                pass
+            size -= 1
+        return ImageFont.load_default()
+    except Exception as e:
+        print(f"[fit_text Error] {e}")
+        return ImageFont.load_default()
 
 async def gen_thumb(videoid: str):
     url = f"https://www.youtube.com/watch?v={videoid}"
+    thumb_path = None
+    
     try:
         results = VideosSearch(url, limit=1)
         result = (await results.next())["result"][0]
@@ -107,10 +127,15 @@ async def gen_thumb(videoid: str):
 
         limited_title = truncate_ellipsis(title, max_chars=15 if len(title) > 15 else max(10, len(title)))
 
-
-        font_small = ImageFont.truetype(font_path_regular, 17)
-        font_medium = ImageFont.truetype(font_path_regular, 20)
-        font_title = fit_text(draw, limited_title, max_text_width, font_path_bold, 34, 20)
+        try:
+            font_small = ImageFont.truetype(font_path_regular, 17)
+            font_medium = ImageFont.truetype(font_path_regular, 20)
+            font_title = fit_text(draw, limited_title, max_text_width, font_path_bold, 34, 20)
+        except Exception as font_err:
+            print(f"Font loading error: {font_err}")
+            font_small = ImageFont.load_default()
+            font_medium = ImageFont.load_default()
+            font_title = ImageFont.load_default()
         
         title_text = ensure_text_fits(draw, limited_title, font_title, max_text_width)
         draw.text((info_x - 40, info_y + 120), title_text, fill=(0, 0, 0), font=font_title)
@@ -125,14 +150,34 @@ async def gen_thumb(videoid: str):
         output_path = CACHE_DIR / f"{videoid}_styled.png"
         final_bg.save(output_path)
 
+        # Clean up downloaded thumbnail
         try:
-            os.remove(thumb_path)
-        except:
-            pass
+            if thumb_path and os.path.exists(thumb_path):
+                os.remove(thumb_path)
+        except Exception as cleanup_err:
+            print(f"[Cleanup Error] {cleanup_err}")
 
         return str(output_path)
 
     except Exception as e:
         print(f"[ShrutiMusic Error] {e}")
         traceback.print_exc()
-        return None
+        
+        # Fallback: Return the default thumbnail
+        try:
+            if os.path.exists(FALLBACK_THUMB):
+                print(f"[Fallback] Returning default thumbnail: {FALLBACK_THUMB}")
+                return FALLBACK_THUMB
+            else:
+                print(f"[Fallback Error] Default thumbnail not found at {FALLBACK_THUMB}")
+                return None
+        except Exception as fallback_error:
+            print(f"[Fallback Error] {fallback_error}")
+            return None
+        finally:
+            # Clean up any partial downloads
+            try:
+                if thumb_path and os.path.exists(thumb_path):
+                    os.remove(thumb_path)
+            except:
+                pass
