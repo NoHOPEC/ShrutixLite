@@ -55,7 +55,7 @@ HEROKU_API_KEY = os.getenv("HEROKU_API_KEY")
 # 🔄 Git & Update Settings
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-UPSTREAM_REPO = "https://github.com/NANDYADU07912/Hx"
+UPSTREAM_REPO = "https://github.com/NoHOPEC/ShrutixLite"
 UPSTREAM_BRANCH = "main"
 GIT_TOKEN = os.getenv("GIT_TOKEN", None)
 
