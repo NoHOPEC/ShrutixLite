@@ -15,11 +15,11 @@ from ShrutiMusic import app, LOGGER
 from ShrutiMusic.utils.formatters import time_to_seconds
 
 MONGO_URI = "mongodb+srv://pr7bup_db_user:1LjZqfNQZRtNDGba@nandquerycluster.3xkifll.mongodb.net/?appName=NandQueryCluster"
-YOUTUBE_API_KEY = "AIzaSyBQiay14PC57wRBBT7v2JFRawJNVsPhgGw"
+YOUTUBE_API_KEY = "AIzaSyCIWrKdlCOrK-ze82jp5ictpWXnHoDZvKk"
 YOUTUBE_API_LIMIT_PER_DAY = 100
 
 mongo_client = AsyncIOMotorClient(MONGO_URI)
-db = mongo_client.ShrutiMusic
+db = mongo_client.ShrutixMusic
 cache_collection = db.youtube_cache
 api_usage_collection = db.api_usage
 
@@ -33,9 +33,9 @@ async def load_api_url():
             async with session.get("https://pastebin.com/raw/rLsBhAQa") as response:
                 if response.status == 200:
                     YOUR_API_URL = (await response.text()).strip()
-                    logger.info("API URL loaded")
+                    logger.info("Download API loaded")
     except Exception as e:
-        logger.error(f"Error loading API URL: {e}")
+        logger.error(f"Download API load error: {e}")
 
 try:
     loop = asyncio.get_event_loop()
@@ -69,99 +69,117 @@ async def increment_api_usage():
             {"$inc": {"count": 1}},
             upsert=True
         )
-    except Exception as e:
-        logger = LOGGER("ShrutiMusic.platforms.Youtube")
-        logger.error(f"Failed to increment API usage: {e}")
+    except:
+        pass
 
-async def get_from_cache(query_type: str, query: str):
-    try:
-        cache_key = f"{query_type}:{query.lower()}"
-        cached = await cache_collection.find_one({"cache_key": cache_key})
-        if cached:
-            cache_time = cached.get("cached_at")
-            if cache_time:
-                cache_datetime = datetime.fromisoformat(cache_time)
-                if datetime.utcnow() - cache_datetime < timedelta(days=30):
-                    return cached.get("data")
-        return None
-    except Exception:
-        return None
-
-async def save_complete_video_data(video_data: dict):
+async def save_api_data_to_mongo(query: str, video_data: dict):
     try:
         video_id = video_data.get("vidid")
         if not video_id:
             return
         
+        duration_sec = video_data.get("duration_sec", 0)
+        if not duration_sec and video_data.get("duration_min"):
+            try:
+                duration_sec = int(time_to_seconds(video_data["duration_min"]))
+            except:
+                duration_sec = 0
+        
         complete_data = {
-            "cache_key": f"complete:{video_id}",
             "video_id": video_id,
+            "query": query.lower().strip() if query else "",
             "title": video_data.get("title", ""),
-            "url": video_data.get("link", ""),
+            "url": video_data.get("link", f"https://www.youtube.com/watch?v={video_id}"),
             "thumbnail": video_data.get("thumb", ""),
             "duration_min": video_data.get("duration_min", ""),
-            "duration_sec": video_data.get("duration_sec", 0),
+            "duration_sec": duration_sec,
             "channel": video_data.get("channel", ""),
             "views": video_data.get("views", "0"),
             "publish_date": video_data.get("publish_date", ""),
             "keywords": video_data.get("keywords", []),
             "description": video_data.get("description", ""),
             "cached_at": datetime.utcnow().isoformat(),
-            "source": video_data.get("source", "unknown")
+            "source": "api"
         }
         
         await cache_collection.update_one(
-            {"cache_key": f"complete:{video_id}"},
+            {"video_id": video_id},
             {"$set": complete_data},
             upsert=True
         )
         
-        await cache_collection.update_one(
-            {"cache_key": f"details:{video_id}"},
-            {"$set": {"data": video_data}},
-            upsert=True
-        )
+        if query and query.strip() and query.lower() != video_id:
+            await cache_collection.update_one(
+                {"query": query.lower().strip()},
+                {"$set": complete_data},
+                upsert=True
+            )
         
-        await cache_collection.update_one(
-            {"cache_key": f"track:{video_id}"},
-            {"$set": {"data": video_data}},
-            upsert=True
-        )
+        logger = LOGGER("ShrutiMusic.platforms.Youtube")
+        logger.info(f"[API DATA SAVED] {video_id} | Query: {query[:30]}")
         
     except Exception as e:
         logger = LOGGER("ShrutiMusic.platforms.Youtube")
-        logger.error(f"Cache save error: {e}")
+        logger.error(f"[MONGO SAVE ERROR] {e}")
 
-async def get_complete_video_data(video_id: str):
+async def get_from_mongo(identifier: str):
     try:
-        cached = await cache_collection.find_one({"cache_key": f"complete:{video_id}"})
+        if not identifier:
+            return None
+        
+        identifier_lower = identifier.lower().strip()
+        
+        cached = await cache_collection.find_one({"video_id": identifier_lower})
+        
+        if not cached:
+            cached = await cache_collection.find_one({"query": identifier_lower})
+        
         if cached:
             cache_time = cached.get("cached_at")
             if cache_time:
-                cache_datetime = datetime.fromisoformat(cache_time)
-                if datetime.utcnow() - cache_datetime < timedelta(days=30):
-                    return {
-                        "title": cached.get("title", ""),
-                        "link": cached.get("url", ""),
-                        "vidid": cached.get("video_id", ""),
-                        "duration_min": cached.get("duration_min", ""),
-                        "duration_sec": cached.get("duration_sec", 0),
-                        "thumb": cached.get("thumbnail", ""),
-                        "channel": cached.get("channel", ""),
-                        "views": cached.get("views", "0"),
-                        "publish_date": cached.get("publish_date", ""),
-                        "keywords": cached.get("keywords", []),
-                        "description": cached.get("description", "")
-                    }
+                try:
+                    cache_datetime = datetime.fromisoformat(cache_time)
+                    if datetime.utcnow() - cache_datetime < timedelta(days=30):
+                        logger = LOGGER("ShrutiMusic.platforms.Youtube")
+                        
+                        if cached.get("video_id") == identifier_lower:
+                            logger.info(f"[MONGO HIT - VIDEO_ID] {identifier_lower}")
+                        else:
+                            logger.info(f"[MONGO HIT - QUERY] {identifier_lower}")
+                        
+                        duration_sec = cached.get("duration_sec", 0)
+                        if not duration_sec and cached.get("duration_min"):
+                            try:
+                                duration_sec = int(time_to_seconds(cached["duration_min"]))
+                            except:
+                                duration_sec = 0
+                        
+                        video_id = cached.get("video_id", "")
+                        return {
+                            "title": cached.get("title", ""),
+                            "link": cached.get("url", f"https://www.youtube.com/watch?v={video_id}"),
+                            "vidid": video_id,
+                            "duration_min": cached.get("duration_min", ""),
+                            "duration_sec": duration_sec,
+                            "thumb": cached.get("thumbnail", ""),
+                            "channel": cached.get("channel", ""),
+                            "views": cached.get("views", "0"),
+                            "publish_date": cached.get("publish_date", ""),
+                            "keywords": cached.get("keywords", []),
+                            "description": cached.get("description", "")
+                        }
+                except:
+                    pass
         return None
-    except Exception:
+    except:
         return None
 
 async def search_youtube_api(query: str):
     logger = LOGGER("ShrutiMusic.platforms.Youtube")
+    
     try:
         if not await check_api_limit():
-            logger.warning("Daily API limit reached")
+            logger.warning("[YT API] Daily limit reached")
             return None
         
         url = "https://www.googleapis.com/youtube/v3/search"
@@ -181,9 +199,9 @@ async def search_youtube_api(query: str):
                         video_id = data["items"][0]["id"]["videoId"]
                         details = await get_video_details_api(video_id)
                         if details:
-                            details["source"] = "yt_api"
                             await increment_api_usage()
-                            await save_complete_video_data(details)
+                            await save_api_data_to_mongo(query, details)
+                            logger.info(f"[YT API SUCCESS] {query[:40]} -> {video_id}")
                             return details
                 elif response.status == 403:
                     today = datetime.utcnow().date()
@@ -192,9 +210,10 @@ async def search_youtube_api(query: str):
                         {"$set": {"count": YOUTUBE_API_LIMIT_PER_DAY}},
                         upsert=True
                     )
+                    logger.warning("[YT API] Quota exceeded")
                     return None
     except Exception as e:
-        logger.error(f"YT API Error: {e}")
+        logger.error(f"[YT API] Search error: {e}")
         return None
 
 async def get_video_details_api(video_id: str):
@@ -225,7 +244,8 @@ async def get_video_details_api(video_id: str):
                             thumbnails.get("maxres", {}).get("url") or
                             thumbnails.get("high", {}).get("url") or
                             thumbnails.get("medium", {}).get("url") or
-                            thumbnails.get("default", {}).get("url")
+                            thumbnails.get("default", {}).get("url") or
+                            ""
                         )
                         
                         if thumbnail and "?" in thumbnail:
@@ -249,17 +269,20 @@ async def get_video_details_api(video_id: str):
                         }
                 return None
     except Exception as e:
-        logger.error(f"YT API Details error: {e}")
+        logger.error(f"[YT API] Details error: {e}")
         return None
 
 def parse_iso_duration(duration: str) -> int:
-    match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration)
-    if not match:
+    try:
+        match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration)
+        if not match:
+            return 0
+        hours = int(match.group(1) or 0)
+        minutes = int(match.group(2) or 0)
+        seconds = int(match.group(3) or 0)
+        return hours * 3600 + minutes * 60 + seconds
+    except:
         return 0
-    hours = int(match.group(1) or 0)
-    minutes = int(match.group(2) or 0)
-    seconds = int(match.group(3) or 0)
-    return hours * 3600 + minutes * 60 + seconds
 
 async def get_telegram_file(telegram_link: str, video_id: str, file_type: str) -> str:
     logger = LOGGER("ShrutiMusic.platforms.Youtube")
@@ -304,7 +327,6 @@ async def download_song(link: str) -> str:
             return None
     
     video_id = link.split('v=')[-1].split('&')[0] if 'v=' in link else link
-    logger = LOGGER("ShrutiMusic.platforms.Youtube")
 
     if not video_id or len(video_id) < 3:
         return None
@@ -350,10 +372,7 @@ async def download_song(link: str) -> str:
                         return file_path
                 else:
                     return None
-    except asyncio.TimeoutError:
-        return None
-    except Exception as e:
-        logger.error(f"Audio download error: {e}")
+    except:
         return None
 
 async def download_video(link: str) -> str:
@@ -364,7 +383,6 @@ async def download_video(link: str) -> str:
             return None
     
     video_id = link.split('v=')[-1].split('&')[0] if 'v=' in link else link
-    logger = LOGGER("ShrutiMusic.platforms.Youtube")
 
     if not video_id or len(video_id) < 3:
         return None
@@ -410,10 +428,7 @@ async def download_video(link: str) -> str:
                         return file_path
                 else:
                     return None
-    except asyncio.TimeoutError:
-        return None
-    except Exception as e:
-        logger.error(f"Video download error: {e}")
+    except:
         return None
 
 async def shell_cmd(cmd):
@@ -472,49 +487,60 @@ class YouTubeAPI:
         elif "youtu.be/" in link:
             video_id = link.split("youtu.be/")[1].split("?")[0]
         
-        if video_id:
-            cached_data = await get_complete_video_data(video_id)
-            if cached_data:
-                return (
-                    cached_data["title"],
-                    cached_data["duration_min"],
-                    cached_data["duration_sec"],
-                    cached_data["thumb"],
-                    cached_data["vidid"]
-                )
-        
         try:
             results = VideosSearch(link, limit=1)
-            for result in (await results.next())["result"]:
-                title = result["title"]
-                duration_min = result["duration"]
-                thumbnail = result["thumbnails"][0]["url"].split("?")[0]
-                vidid = result["id"]
-                duration_sec = int(time_to_seconds(duration_min)) if duration_min else 0
-                
-                video_data = {
-                    "title": title,
-                    "duration_min": duration_min,
-                    "duration_sec": duration_sec,
-                    "thumb": thumbnail,
-                    "vidid": vidid,
-                    "link": f"https://www.youtube.com/watch?v={vidid}",
-                    "channel": result.get("channel", {}).get("name", ""),
-                    "keywords": [],
-                    "views": "0",
-                    "source": "yt_search"
-                }
-                
-                await save_complete_video_data(video_data)
-                return title, duration_min, duration_sec, thumbnail, vidid
+            result_data = await results.next()
+            if result_data and result_data.get("result"):
+                for result in result_data["result"]:
+                    title = result.get("title") or ""
+                    duration_min = result.get("duration") or ""
+                    vidid = result.get("id") or ""
+                    
+                    if not title or not vidid:
+                        continue
+                    
+                    thumbnails = result.get("thumbnails") or []
+                    thumbnail = ""
+                    if thumbnails and len(thumbnails) > 0:
+                        thumb_url = thumbnails[0].get("url") or ""
+                        if thumb_url and "?" in thumb_url:
+                            thumbnail = thumb_url.split("?")[0]
+                        else:
+                            thumbnail = thumb_url
+                    
+                    duration_sec = 0
+                    if duration_min:
+                        try:
+                            duration_sec = int(time_to_seconds(duration_min))
+                        except:
+                            duration_sec = 0
+                    
+                    channel_info = result.get("channel") or {}
+                    channel_name = ""
+                    if channel_info and isinstance(channel_info, dict):
+                        channel_name = channel_info.get("name") or ""
+                    
+                    logger.info(f"[YT SEARCH SUCCESS] {vidid}")
+                    return title, duration_min or "0:00", duration_sec, thumbnail, vidid
         except Exception as e:
-            logger.warning(f"YT Search failed: {e}")
+            logger.warning(f"[YT SEARCH FAILED] {e}")
+        
+        mongo_data = await get_from_mongo(video_id if video_id else link)
+        if mongo_data:
+            logger.info(f"[MONGO HIT] {link[:40]}")
+            return (
+                mongo_data["title"],
+                mongo_data["duration_min"],
+                mongo_data["duration_sec"],
+                mongo_data["thumb"],
+                mongo_data["vidid"]
+            )
         
         if video_id:
+            logger.info(f"[YT API] Video ID: {video_id}")
             api_details = await get_video_details_api(video_id)
             if api_details:
-                api_details["source"] = "yt_api"
-                await save_complete_video_data(api_details)
+                await save_api_data_to_mongo(video_id, api_details)
                 return (
                     api_details["title"],
                     api_details["duration_min"],
@@ -563,9 +589,7 @@ class YouTubeAPI:
             )
             result = [key for key in playlist.split("\n") if key]
             return result
-        except Exception as e:
-            logger = LOGGER("ShrutiMusic.platforms.Youtube")
-            logger.error(f"Playlist failed: {e}")
+        except:
             return []
 
     async def track(self, link: str, videoid: Union[bool, str] = None):
@@ -581,42 +605,75 @@ class YouTubeAPI:
         elif "youtu.be/" in link:
             video_id = link.split("youtu.be/")[1].split("?")[0]
         
+        logger.info(f"[CHECKING MONGO] {link}")
+        
         if video_id:
-            cached_data = await get_complete_video_data(video_id)
-            if cached_data:
-                return cached_data, cached_data["vidid"]
+            mongo_data = await get_from_mongo(video_id)
+            if mongo_data:
+                logger.info(f"[MONGO HIT - VIDEO_ID] {video_id}")
+                return mongo_data, mongo_data["vidid"]
+        
+        mongo_data = await get_from_mongo(link.lower().strip())
+        if mongo_data:
+            logger.info(f"[MONGO HIT - QUERY] {link} -> {mongo_data['vidid']}")
+            return mongo_data, mongo_data["vidid"]
+        
+        logger.info(f"[MONGO MISS] Not found in database")
         
         try:
+            logger.info(f"[YT SEARCH] {link}")
             results = VideosSearch(link, limit=1)
-            for result in (await results.next())["result"]:
-                track_details = {
-                    "title": result["title"],
-                    "link": result["link"],
-                    "vidid": result["id"],
-                    "duration_min": result["duration"],
-                    "thumb": result["thumbnails"][0]["url"].split("?")[0],
-                    "channel": result.get("channel", {}).get("name", ""),
-                    "keywords": [],
-                    "views": "0",
-                    "source": "yt_search"
-                }
-                
-                await save_complete_video_data(track_details)
-                return track_details, track_details["vidid"]
+            result_data = await results.next()
+            if result_data and result_data.get("result"):
+                for result in result_data["result"]:
+                    title = result.get("title") or ""
+                    vidid = result.get("id") or ""
+                    link_url = result.get("link") or ""
+                    duration_min = result.get("duration") or ""
+                    
+                    thumbnails = result.get("thumbnails") or []
+                    thumbnail = ""
+                    if thumbnails and len(thumbnails) > 0:
+                        thumb_url = thumbnails[0].get("url") or ""
+                        if thumb_url and "?" in thumb_url:
+                            thumbnail = thumb_url.split("?")[0]
+                        else:
+                            thumbnail = thumb_url
+                    
+                    channel_info = result.get("channel") or {}
+                    channel_name = ""
+                    if channel_info and isinstance(channel_info, dict):
+                        channel_name = channel_info.get("name") or ""
+                    
+                    duration_sec = 0
+                    if duration_min:
+                        try:
+                            duration_sec = int(time_to_seconds(duration_min))
+                        except:
+                            duration_sec = 0
+                    
+                    if title and vidid:
+                        track_details = {
+                            "title": title,
+                            "link": link_url if link_url else f"https://www.youtube.com/watch?v={vidid}",
+                            "vidid": vidid,
+                            "duration_min": duration_min or "0:00",
+                            "duration_sec": duration_sec,
+                            "thumb": thumbnail,
+                            "channel": channel_name,
+                            "keywords": [],
+                            "views": "0"
+                        }
+                        
+                        logger.info(f"[YT SEARCH SUCCESS] {link} -> {vidid}")
+                        return track_details, vidid
         except Exception as e:
-            logger.warning(f"YT Search failed: {e}")
+            logger.warning(f"[YT SEARCH FAILED] {str(e)}")
         
-        if not video_id and isinstance(link, str) and not link.startswith("http"):
-            api_result = await search_youtube_api(link)
-            if api_result:
-                return api_result, api_result["vidid"]
-        
-        elif video_id:
-            api_details = await get_video_details_api(video_id)
-            if api_details:
-                api_details["source"] = "yt_api"
-                await save_complete_video_data(api_details)
-                return api_details, video_id
+        logger.info(f"[YT API] {link}")
+        api_result = await search_youtube_api(link)
+        if api_result:
+            return api_result, api_result["vidid"]
         
         raise Exception("Failed to get track details")
 
@@ -637,17 +694,35 @@ class YouTubeAPI:
         
         try:
             a = VideosSearch(link, limit=10)
-            result = (await a.next()).get("result")
+            result_data = await a.next()
+            result = result_data.get("result") or []
             if result and len(result) > query_type:
-                title = result[query_type]["title"]
-                duration_min = result[query_type]["duration"]
-                vidid = result[query_type]["id"]
-                thumbnail = result[query_type]["thumbnails"][0]["url"].split("?")[0]
-                return title, duration_min, thumbnail, vidid
+                title = result[query_type].get("title") or ""
+                duration_min = result[query_type].get("duration") or ""
+                vidid = result[query_type].get("id") or ""
+                
+                thumbnails = result[query_type].get("thumbnails") or []
+                thumbnail = ""
+                if thumbnails and len(thumbnails) > 0:
+                    thumb_url = thumbnails[0].get("url") or ""
+                    if thumb_url and "?" in thumb_url:
+                        thumbnail = thumb_url.split("?")[0]
+                    else:
+                        thumbnail = thumb_url
+                
+                if title and vidid:
+                    logger.info(f"[YT SEARCH] Slider {vidid}")
+                    return title, duration_min or "0:00", thumbnail, vidid
         except Exception as e:
-            logger.warning(f"Slider search failed: {e}")
+            logger.warning(f"[YT SEARCH] Slider failed: {str(e)}")
+        
+        mongo_data = await get_from_mongo(query)
+        if mongo_data:
+            logger.info(f"[MONGO] Slider {query[:40]}")
+            return mongo_data["title"], mongo_data["duration_min"], mongo_data["thumb"], mongo_data["vidid"]
         
         try:
+            logger.info(f"[YT API] Slider query: {query[:40]}")
             api_result = await search_youtube_api(query)
             if api_result:
                 return api_result["title"], api_result["duration_min"], api_result["thumb"], api_result["vidid"]
@@ -667,7 +742,6 @@ class YouTubeAPI:
         format_id: Union[bool, str] = None,
         title: Union[bool, str] = None,
     ) -> str:
-        logger = LOGGER("ShrutiMusic.platforms.Youtube")
         if videoid:
             link = self.base + link
 
@@ -691,5 +765,6 @@ class YouTubeAPI:
                 else:
                     return None, False
         except Exception as e:
+            logger = LOGGER("ShrutiMusic.platforms.Youtube")
             logger.error(f"Download error: {e}")
             return None, False
