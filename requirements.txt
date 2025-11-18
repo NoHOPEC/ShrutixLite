@@ -11,7 +11,7 @@ ffmpeg-python
 gitpython
 hachoir
 heroku3
-httpx[http2]==0.27.0
+httpx[http2]
 motor
 numpy
 opencv-python
@@ -33,4 +33,5 @@ youtube-search
 youtube-search-python
 py-yt-search
 git+https://github.com/yt-dlp/yt-dlp.git
+
 
