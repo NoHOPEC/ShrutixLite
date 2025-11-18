@@ -31,8 +31,6 @@ unidecode
 #yt-dlp
 youtube-search
 youtube-search-python
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-auth-oauthlib
+py-yt-search
 git+https://github.com/yt-dlp/yt-dlp.git
+
