@@ -5,18 +5,21 @@ from aiofiles.os import path as aiopath
 from py_yt import VideosSearch
 
 from ..logging import LOGGER
+from ShrutiMusic import app
 
 def load_fonts():
     try:
         return {
             "cfont": ImageFont.truetype("ShrutiMusic/assets/cfont.ttf", 24),
             "tfont": ImageFont.truetype("ShrutiMusic/assets/font.ttf", 30),
+            "sfont": ImageFont.truetype("ShrutiMusic/assets/cfont.ttf", 20),
         }
     except Exception as e:
         LOGGER.error("Font loading error: %s, using default fonts", e)
         return {
             "cfont": ImageFont.load_default(),
             "tfont": ImageFont.load_default(),
+            "sfont": ImageFont.load_default(),
         }
 
 FONTS = load_fonts()
@@ -214,6 +217,16 @@ def add_audio_visualizer(bg: Image.Image, thumb: Image.Image) -> Image.Image:
     bg = Image.alpha_composite(bg, overlay)
     return bg
 
+def format_views(views: int) -> str:
+    if views >= 1000000000:
+        return f"{views / 1000000000:.1f}B"
+    elif views >= 1000000:
+        return f"{views / 1000000:.1f}M"
+    elif views >= 1000:
+        return f"{views / 1000:.1f}K"
+    else:
+        return str(views)
+
 async def gen_thumb(videoid: str) -> str:
     if not videoid or not re.match(r"^[a-zA-Z0-9_-]{11}$", videoid):
         LOGGER.error("Invalid YouTube video ID: %s", videoid)
@@ -236,10 +249,21 @@ async def gen_thumb(videoid: str) -> str:
         title = clean_text(result.get("title", "Unknown Title"), limit=25)
         artist = clean_text(result.get("channel", {}).get("name", "Unknown Artist"), limit=28)
         thumbnail_url = result.get("thumbnails", [{}])[0].get("url", "").split("?")[0]
+        views = result.get("viewCount", {}).get("text", "0").replace(" views", "").replace(",", "")
+        try:
+            views_count = int(views)
+            views_text = format_views(views_count)
+        except:
+            views_text = "0"
     except Exception as e:
         LOGGER.error("YouTube metadata fetch error for video %s: %s", videoid, e)
-        title, artist = "Unknown Title", "Unknown Artist"
+        title, artist, views_text = "Unknown Title", "Unknown Artist", "0"
         thumbnail_url = YOUTUBE_IMG_URL
+
+    try:
+        bot_username = f"@{app.username}"
+    except:
+        bot_username = "@ShrutiBots"
 
     thumb = await fetch_image(thumbnail_url)
     bg = await add_controls(thumb)
@@ -250,7 +274,10 @@ async def gen_thumb(videoid: str) -> str:
     
     draw = ImageDraw.Draw(bg)
     draw.text((540, 155), title, (255, 255, 255), font=FONTS["tfont"])  
-    draw.text((540, 200), artist, (255, 255, 255), font=FONTS["cfont"]) 
+    draw.text((540, 200), artist, (255, 255, 255), font=FONTS["cfont"])
+    
+    draw.text((540, 235), f"👁 {views_text} Views", (200, 200, 200), font=FONTS["sfont"])
+    draw.text((750, 235), bot_username, (200, 200, 200), font=FONTS["sfont"])
 
     bg = add_audio_visualizer(bg, thumb)
     bg = add_edge_glow(bg)
