@@ -86,36 +86,44 @@ def clean_text(text: str, limit: int = 25) -> str:
     text = text.strip()
     return f"{text[:limit - 3]}..." if len(text) > limit else text
 
-def add_edge_gradient(img: Image.Image) -> Image.Image:
+def get_dominant_color(img: Image.Image) -> tuple:
+    small = img.resize((50, 50))
+    pixels = list(small.getdata())
+    r_total, g_total, b_total = 0, 0, 0
+    count = 0
+    for pixel in pixels:
+        if len(pixel) >= 3:
+            r_total += pixel[0]
+            g_total += pixel[1]
+            b_total += pixel[2]
+            count += 1
+    if count == 0:
+        return (100, 100, 100)
+    return (r_total // count, g_total // count, b_total // count)
+
+def add_edge_glow(img: Image.Image) -> Image.Image:
     width, height = img.size
-    gradient_depth = 60
+    glow_width = 100
     
-    img_copy = img.copy()
-    blurred = img.filter(ImageFilter.GaussianBlur(radius=25))
+    dominant_color = get_dominant_color(img)
     
-    gradient_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    glow_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     
-    for i in range(gradient_depth):
-        alpha = int(255 * (1 - i / gradient_depth))
-        temp_img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        temp_draw = ImageDraw.Draw(temp_img)
-        temp_draw.rectangle([i, i, width - i - 1, height - i - 1], outline=(0, 0, 0, 0))
-        gradient_overlay = Image.alpha_composite(gradient_overlay, temp_img)
+    for i in range(glow_width):
+        progress = 1 - (i / glow_width)
+        alpha = int(180 * progress * progress)
+        
+        glow_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(glow_layer)
+        
+        draw.rectangle([i, i, width - i, height - i], 
+                      outline=dominant_color + (alpha,), 
+                      width=2)
+        
+        glow_overlay = Image.alpha_composite(glow_overlay, glow_layer)
     
-    for y in range(height):
-        for x in range(width):
-            dist_from_edge = min(x, y, width - x - 1, height - y - 1)
-            if dist_from_edge < gradient_depth:
-                blend_factor = dist_from_edge / gradient_depth
-                img_pixel = img_copy.getpixel((x, y))
-                blur_pixel = blurred.getpixel((x, y))
-                new_pixel = tuple(int(img_pixel[i] * blend_factor + blur_pixel[i] * (1 - blend_factor)) for i in range(3))
-                if len(img_pixel) == 4:
-                    new_pixel = new_pixel + (img_pixel[3],)
-                img_copy.putpixel((x, y), new_pixel)
-    
-    blurred.close()
-    return img_copy
+    result = Image.alpha_composite(img.convert("RGBA"), glow_overlay)
+    return result
 
 async def add_controls(img: Image.Image) -> Image.Image:
     img = img.filter(ImageFilter.GaussianBlur(radius=10))
@@ -169,38 +177,39 @@ def make_rounded_rectangle(image: Image.Image, size: tuple = (184, 184)) -> Imag
     resize.close()
     return rounded
 
-def add_decorative_elements(bg: Image.Image, thumb: Image.Image) -> Image.Image:
+def add_audio_visualizer(bg: Image.Image, thumb: Image.Image) -> Image.Image:
     overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     
-    avg_color = thumb.resize((1, 1)).getpixel((0, 0))
-    if len(avg_color) == 4:
-        avg_color = avg_color[:3]
+    dominant_color = get_dominant_color(thumb)
     
-    circle_x, circle_y = 750, 285
-    circle_radius = 70
+    center_x = 750
+    center_y = 290
     
-    for r in range(circle_radius, 0, -3):
-        alpha = int(20 * (1 - r / circle_radius))
-        temp_overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
-        temp_draw = ImageDraw.Draw(temp_overlay)
-        temp_draw.ellipse(
-            [circle_x - r, circle_y - r, circle_x + r, circle_y + r],
-            fill=avg_color + (alpha,)
+    num_bars = 30
+    bar_width = 4
+    radius_start = 60
+    radius_end = 95
+    
+    import math
+    for i in range(num_bars):
+        angle = (i / num_bars) * 2 * math.pi
+        bar_height = 20 + (i % 3) * 10
+        
+        x1 = center_x + int(radius_start * math.cos(angle))
+        y1 = center_y + int(radius_start * math.sin(angle))
+        x2 = center_x + int((radius_start + bar_height) * math.cos(angle))
+        y2 = center_y + int((radius_start + bar_height) * math.sin(angle))
+        
+        alpha = 120 - (i % 3) * 30
+        draw.line([x1, y1, x2, y2], fill=dominant_color + (alpha,), width=bar_width)
+    
+    for r in range(50, 0, -5):
+        alpha = int(15 * (1 - r / 50))
+        draw.ellipse(
+            [center_x - r, center_y - r, center_x + r, center_y + r],
+            fill=dominant_color + (alpha,)
         )
-        overlay = Image.alpha_composite(overlay, temp_overlay)
-    
-    wave_y_base = 270
-    for wave_idx in range(4):
-        y_pos = wave_y_base + (wave_idx * 20)
-        wave_alpha = 35 - (wave_idx * 8)
-        for x in range(550, 950, 12):
-            offset = (x - 550) / 400
-            y_wave = y_pos + int(8 * ((offset * 3.14159) % 1))
-            draw.ellipse(
-                [x - 2, y_wave - 2, x + 2, y_wave + 2],
-                fill=avg_color + (wave_alpha,)
-            )
     
     bg = Image.alpha_composite(bg, overlay)
     return bg
@@ -240,11 +249,11 @@ async def gen_thumb(videoid: str) -> str:
     bg.paste(image, (paste_x, paste_y), image)
     
     draw = ImageDraw.Draw(bg)
-    draw.text((540, 140), title, (255, 255, 255), font=FONTS["tfont"])  
-    draw.text((540, 185), artist, (255, 255, 255), font=FONTS["cfont"]) 
+    draw.text((540, 155), title, (255, 255, 255), font=FONTS["tfont"])  
+    draw.text((540, 200), artist, (255, 255, 255), font=FONTS["cfont"]) 
 
-    bg = add_decorative_elements(bg, thumb)
-    bg = add_edge_gradient(bg)
+    bg = add_audio_visualizer(bg, thumb)
+    bg = add_edge_glow(bg)
     
     bg = ImageEnhance.Contrast(bg).enhance(1.1)
     bg = ImageEnhance.Color(bg).enhance(1.2)
