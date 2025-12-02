@@ -88,19 +88,34 @@ def clean_text(text: str, limit: int = 25) -> str:
 
 def add_edge_gradient(img: Image.Image) -> Image.Image:
     width, height = img.size
-    gradient_width = 80
+    gradient_depth = 60
     
-    gradient_mask = Image.new("L", (width, height), 255)
-    draw = ImageDraw.Draw(gradient_mask)
+    img_copy = img.copy()
+    blurred = img.filter(ImageFilter.GaussianBlur(radius=25))
     
-    for i in range(gradient_width):
-        alpha = int(255 * (i / gradient_width))
-        draw.rectangle([i, i, width - i - 1, height - i - 1], outline=alpha)
+    gradient_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     
-    blurred_bg = img.filter(ImageFilter.GaussianBlur(radius=15))
+    for i in range(gradient_depth):
+        alpha = int(255 * (1 - i / gradient_depth))
+        temp_img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        temp_draw = ImageDraw.Draw(temp_img)
+        temp_draw.rectangle([i, i, width - i - 1, height - i - 1], outline=(0, 0, 0, 0))
+        gradient_overlay = Image.alpha_composite(gradient_overlay, temp_img)
     
-    result = Image.composite(img, blurred_bg, gradient_mask)
-    return result
+    for y in range(height):
+        for x in range(width):
+            dist_from_edge = min(x, y, width - x - 1, height - y - 1)
+            if dist_from_edge < gradient_depth:
+                blend_factor = dist_from_edge / gradient_depth
+                img_pixel = img_copy.getpixel((x, y))
+                blur_pixel = blurred.getpixel((x, y))
+                new_pixel = tuple(int(img_pixel[i] * blend_factor + blur_pixel[i] * (1 - blend_factor)) for i in range(3))
+                if len(img_pixel) == 4:
+                    new_pixel = new_pixel + (img_pixel[3],)
+                img_copy.putpixel((x, y), new_pixel)
+    
+    blurred.close()
+    return img_copy
 
 async def add_controls(img: Image.Image) -> Image.Image:
     img = img.filter(ImageFilter.GaussianBlur(radius=10))
@@ -154,36 +169,40 @@ def make_rounded_rectangle(image: Image.Image, size: tuple = (184, 184)) -> Imag
     resize.close()
     return rounded
 
-def add_decorative_elements(bg: Image.Image) -> Image.Image:
-    draw = ImageDraw.Draw(bg)
+def add_decorative_elements(bg: Image.Image, thumb: Image.Image) -> Image.Image:
+    overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
     
-    circle_x, circle_y = 750, 280
-    circle_radius = 80
+    avg_color = thumb.resize((1, 1)).getpixel((0, 0))
+    if len(avg_color) == 4:
+        avg_color = avg_color[:3]
     
-    for r in range(circle_radius, 0, -2):
-        alpha = int(30 * (1 - r / circle_radius))
-        overlay = Image.new("RGBA", bg.size, (255, 255, 255, 0))
-        overlay_draw = ImageDraw.Draw(overlay)
-        overlay_draw.ellipse(
+    circle_x, circle_y = 750, 285
+    circle_radius = 70
+    
+    for r in range(circle_radius, 0, -3):
+        alpha = int(20 * (1 - r / circle_radius))
+        temp_overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
+        temp_draw = ImageDraw.Draw(temp_overlay)
+        temp_draw.ellipse(
             [circle_x - r, circle_y - r, circle_x + r, circle_y + r],
-            fill=(255, 255, 255, alpha)
+            fill=avg_color + (alpha,)
         )
-        bg = Image.alpha_composite(bg, overlay)
+        overlay = Image.alpha_composite(overlay, temp_overlay)
     
-    wave_overlay = Image.new("RGBA", bg.size, (255, 255, 255, 0))
-    wave_draw = ImageDraw.Draw(wave_overlay)
-    
-    for i in range(3):
-        y_offset = 260 + (i * 25)
-        for x in range(550, 950, 15):
-            wave_height = 8
-            wave_draw.ellipse(
-                [x - 3, y_offset - wave_height, x + 3, y_offset + wave_height],
-                fill=(255, 255, 255, 40 - i * 10)
+    wave_y_base = 270
+    for wave_idx in range(4):
+        y_pos = wave_y_base + (wave_idx * 20)
+        wave_alpha = 35 - (wave_idx * 8)
+        for x in range(550, 950, 12):
+            offset = (x - 550) / 400
+            y_wave = y_pos + int(8 * ((offset * 3.14159) % 1))
+            draw.ellipse(
+                [x - 2, y_wave - 2, x + 2, y_wave + 2],
+                fill=avg_color + (wave_alpha,)
             )
     
-    bg = Image.alpha_composite(bg, wave_overlay)
-    
+    bg = Image.alpha_composite(bg, overlay)
     return bg
 
 async def gen_thumb(videoid: str) -> str:
@@ -221,10 +240,10 @@ async def gen_thumb(videoid: str) -> str:
     bg.paste(image, (paste_x, paste_y), image)
     
     draw = ImageDraw.Draw(bg)
-    draw.text((540, 155), title, (255, 255, 255), font=FONTS["tfont"])  
-    draw.text((540, 200), artist, (255, 255, 255), font=FONTS["cfont"]) 
+    draw.text((540, 140), title, (255, 255, 255), font=FONTS["tfont"])  
+    draw.text((540, 185), artist, (255, 255, 255), font=FONTS["cfont"]) 
 
-    bg = add_decorative_elements(bg)
+    bg = add_decorative_elements(bg, thumb)
     bg = add_edge_gradient(bg)
     
     bg = ImageEnhance.Contrast(bg).enhance(1.1)
