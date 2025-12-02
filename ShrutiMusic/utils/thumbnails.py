@@ -140,7 +140,7 @@ def make_rounded_rectangle(image: Image.Image, size: tuple = (184, 184)) -> Imag
     resize.close()
     return rounded
 
-async def get_thumb(videoid: str) -> str:
+async def gen_thumb(videoid: str) -> str:
     if not videoid or not re.match(r"^[a-zA-Z0-9_-]{11}$", videoid):
         LOGGER.error("Invalid YouTube video ID: %s", videoid)
         return ""
