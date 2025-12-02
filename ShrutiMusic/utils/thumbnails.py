@@ -21,9 +21,7 @@ def load_fonts():
 
 FONTS = load_fonts()
 
-
 FALLBACK_IMAGE_PATH = "ShrutiMusic/assets/controller.png"
-
 YOUTUBE_IMG_URL = "https://i.ytimg.com/vi/default.jpg"
 
 async def resize_youtube_thumbnail(img: Image.Image) -> Image.Image:
@@ -88,10 +86,27 @@ def clean_text(text: str, limit: int = 25) -> str:
     text = text.strip()
     return f"{text[:limit - 3]}..." if len(text) > limit else text
 
+def add_edge_gradient(img: Image.Image) -> Image.Image:
+    width, height = img.size
+    gradient_width = 80
+    
+    gradient_mask = Image.new("L", (width, height), 255)
+    draw = ImageDraw.Draw(gradient_mask)
+    
+    for i in range(gradient_width):
+        alpha = int(255 * (i / gradient_width))
+        draw.rectangle([i, i, width - i - 1, height - i - 1], outline=alpha)
+    
+    blurred_bg = img.filter(ImageFilter.GaussianBlur(radius=15))
+    
+    result = Image.composite(img, blurred_bg, gradient_mask)
+    return result
+
 async def add_controls(img: Image.Image) -> Image.Image:
     img = img.filter(ImageFilter.GaussianBlur(radius=10))
     box = (305, 125, 975, 595)
     region = img.crop(box)
+    
     try:
         controls = Image.open("ShrutiMusic/assets/controls.png").convert("RGBA")
         controls = controls.resize((1200, 320), Image.Resampling.LANCZOS)
@@ -104,7 +119,6 @@ async def add_controls(img: Image.Image) -> Image.Image:
         LOGGER.error("Controls image loading error: %s", e)
         controls = Image.new("RGBA", (600, 160), (0, 0, 0, 0))
         controls_x, controls_y = 335, 415
-
 
     dark_region = ImageEnhance.Brightness(region).enhance(0.5)
     mask = Image.new("L", dark_region.size, 0)
@@ -140,6 +154,38 @@ def make_rounded_rectangle(image: Image.Image, size: tuple = (184, 184)) -> Imag
     resize.close()
     return rounded
 
+def add_decorative_elements(bg: Image.Image) -> Image.Image:
+    draw = ImageDraw.Draw(bg)
+    
+    circle_x, circle_y = 750, 280
+    circle_radius = 80
+    
+    for r in range(circle_radius, 0, -2):
+        alpha = int(30 * (1 - r / circle_radius))
+        overlay = Image.new("RGBA", bg.size, (255, 255, 255, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        overlay_draw.ellipse(
+            [circle_x - r, circle_y - r, circle_x + r, circle_y + r],
+            fill=(255, 255, 255, alpha)
+        )
+        bg = Image.alpha_composite(bg, overlay)
+    
+    wave_overlay = Image.new("RGBA", bg.size, (255, 255, 255, 0))
+    wave_draw = ImageDraw.Draw(wave_overlay)
+    
+    for i in range(3):
+        y_offset = 260 + (i * 25)
+        for x in range(550, 950, 15):
+            wave_height = 8
+            wave_draw.ellipse(
+                [x - 3, y_offset - wave_height, x + 3, y_offset + wave_height],
+                fill=(255, 255, 255, 40 - i * 10)
+            )
+    
+    bg = Image.alpha_composite(bg, wave_overlay)
+    
+    return bg
+
 async def gen_thumb(videoid: str) -> str:
     if not videoid or not re.match(r"^[a-zA-Z0-9_-]{11}$", videoid):
         LOGGER.error("Invalid YouTube video ID: %s", videoid)
@@ -173,16 +219,16 @@ async def gen_thumb(videoid: str) -> str:
 
     paste_x, paste_y = 325, 155 
     bg.paste(image, (paste_x, paste_y), image)
-
     
     draw = ImageDraw.Draw(bg)
     draw.text((540, 155), title, (255, 255, 255), font=FONTS["tfont"])  
     draw.text((540, 200), artist, (255, 255, 255), font=FONTS["cfont"]) 
 
-
+    bg = add_decorative_elements(bg)
+    bg = add_edge_gradient(bg)
+    
     bg = ImageEnhance.Contrast(bg).enhance(1.1)
     bg = ImageEnhance.Color(bg).enhance(1.2)
-
 
     try:
         await asyncio.to_thread(bg.save, save_dir, format="PNG", quality=95, optimize=True)
