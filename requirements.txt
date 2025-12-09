@@ -28,10 +28,11 @@ spotipy
 tgcrypto
 unidecode
 #uvloop
-#yt-dlp
+yt-dlp
 youtube-search
 youtube-search-python
 py-yt-search
-git+https://github.com/yt-dlp/yt-dlp.git
+#git+https://github.com/yt-dlp/yt-dlp.git
+
 
 
