@@ -26,7 +26,8 @@ FONTS = load_fonts()
 FALLBACK_IMAGE_PATH = "ShrutiMusic/assets/controller.png"
 YOUTUBE_IMG_URL = "https://i.ytimg.com/vi/default.jpg"
 
-async def yt_fast_search(query, limit=1):
+def yt_fast_search_sync(query, limit=1):
+    """Synchronous version for use in gen_thumb"""
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
@@ -253,13 +254,17 @@ async def gen_thumb(videoid: str) -> str:
 
     try:
         url = f"https://www.youtube.com/watch?v={videoid}"
-        results = await yt_fast_search(url, limit=1)
+        
+        # Run sync function in thread to avoid blocking
+        results = await asyncio.to_thread(yt_fast_search_sync, url, 1)
         
         if results:
             result = results[0]
             title = clean_text(result.get("title", "Unknown Title"), limit=25)
             artist = clean_text(result.get("uploader", "Unknown Artist"), limit=28)
-            thumbnail_url = result.get("thumbnail", "").split("?")[0]
+            thumbnail_url = result.get("thumbnail", "")
+            if thumbnail_url:
+                thumbnail_url = thumbnail_url.split("?")[0]
             
             view_count = result.get("view_count", 0)
             if view_count:
