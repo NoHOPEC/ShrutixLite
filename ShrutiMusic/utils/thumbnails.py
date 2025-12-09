@@ -1,8 +1,7 @@
-import asyncio, os, re, httpx, aiofiles.os
+import asyncio, os, re, httpx, aiofiles.os, yt_dlp
 from io import BytesIO 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 from aiofiles.os import path as aiopath
-from py_yt import VideosSearch
 
 from ..logging import LOGGER
 from ShrutiMusic import app
@@ -26,6 +25,16 @@ FONTS = load_fonts()
 
 FALLBACK_IMAGE_PATH = "ShrutiMusic/assets/controller.png"
 YOUTUBE_IMG_URL = "https://i.ytimg.com/vi/default.jpg"
+
+async def yt_fast_search(query, limit=1):
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "extract_flat": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        data = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+        return data.get("entries", [])
 
 async def resize_youtube_thumbnail(img: Image.Image) -> Image.Image:
     target_width, target_height = 1280, 720
@@ -244,17 +253,23 @@ async def gen_thumb(videoid: str) -> str:
 
     try:
         url = f"https://www.youtube.com/watch?v={videoid}"
-        results = VideosSearch(url, limit=1)
-        result = (await results.next())["result"][0]
-        title = clean_text(result.get("title", "Unknown Title"), limit=25)
-        artist = clean_text(result.get("channel", {}).get("name", "Unknown Artist"), limit=28)
-        thumbnail_url = result.get("thumbnails", [{}])[0].get("url", "").split("?")[0]
-        views = result.get("viewCount", {}).get("text", "0").replace(" views", "").replace(",", "")
-        try:
-            views_count = int(views)
-            views_text = format_views(views_count)
-        except:
-            views_text = "0"
+        results = await yt_fast_search(url, limit=1)
+        
+        if results:
+            result = results[0]
+            title = clean_text(result.get("title", "Unknown Title"), limit=25)
+            artist = clean_text(result.get("uploader", "Unknown Artist"), limit=28)
+            thumbnail_url = result.get("thumbnail", "").split("?")[0]
+            
+            view_count = result.get("view_count", 0)
+            if view_count:
+                views_text = format_views(view_count)
+            else:
+                views_text = "0"
+        else:
+            title, artist, views_text = "Unknown Title", "Unknown Artist", "0"
+            thumbnail_url = YOUTUBE_IMG_URL
+            
     except Exception as e:
         LOGGER.error("YouTube metadata fetch error for video %s: %s", videoid, e)
         title, artist, views_text = "Unknown Title", "Unknown Artist", "0"
