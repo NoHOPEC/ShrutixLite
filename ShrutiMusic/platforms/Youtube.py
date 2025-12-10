@@ -1,11 +1,11 @@
 import asyncio
 import os
 import re
-import json
 from typing import Union
 import yt_dlp
 from pyrogram.enums import MessageEntityType
 from pyrogram.types import Message
+from py_yt import VideosSearch
 from ShrutiMusic.utils.formatters import time_to_seconds
 import aiohttp
 from ShrutiMusic import LOGGER
@@ -40,16 +40,6 @@ try:
 except RuntimeError:
     pass
 
-async def yt_fast_search(query, limit=1):
-    ydl_opts = {
-        "quiet": True,
-        "skip_download": True,
-        "extract_flat": True,
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        data = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-        return data.get("entries", [])
-
 async def download_song(link: str) -> str:
     global YOUR_API_URL
     
@@ -83,13 +73,16 @@ async def download_song(link: str) -> str:
                     return None
 
                 data = await response.json()
-                stream_url = data.get("stream_url")
+                download_token = data.get("download_token")
                 
-                if not stream_url:
+                if not download_token:
                     return None
+                
+                stream_url = f"{YOUR_API_URL}/stream/{video_id}?type=audio"
                 
                 async with session.get(
                     stream_url,
+                    headers={"X-Download-Token": download_token},
                     timeout=aiohttp.ClientTimeout(total=300)
                 ) as file_response:
                     if file_response.status != 200:
@@ -137,13 +130,16 @@ async def download_video(link: str) -> str:
                     return None
 
                 data = await response.json()
-                stream_url = data.get("stream_url")
+                download_token = data.get("download_token")
                 
-                if not stream_url:
+                if not download_token:
                     return None
+                
+                stream_url = f"{YOUR_API_URL}/stream/{video_id}?type=video"
                 
                 async with session.get(
                     stream_url,
+                    headers={"X-Download-Token": download_token},
                     timeout=aiohttp.ClientTimeout(total=600)
                 ) as file_response:
                     if file_response.status != 200:
@@ -206,50 +202,41 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        
-        results = await yt_fast_search(link, limit=1)
-        if results:
-            result = results[0]
-            title = result.get("title", "Unknown")
-            duration_min = result.get("duration_string", "0:00")
-            thumbnail = result.get("thumbnail", "")
-            vidid = result.get("id", "")
+        results = VideosSearch(link, limit=1)
+        for result in (await results.next())["result"]:
+            title = result["title"]
+            duration_min = result["duration"]
+            thumbnail = result["thumbnails"][0]["url"].split("?")[0]
+            vidid = result["id"]
             duration_sec = int(time_to_seconds(duration_min)) if duration_min else 0
-            return title, duration_min, duration_sec, thumbnail, vidid
-        return None, None, 0, None, None
+        return title, duration_min, duration_sec, thumbnail, vidid
 
     async def title(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        
-        results = await yt_fast_search(link, limit=1)
-        if results:
-            return results[0].get("title", "Unknown")
-        return "Unknown"
+        results = VideosSearch(link, limit=1)
+        for result in (await results.next())["result"]:
+            return result["title"]
 
     async def duration(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        
-        results = await yt_fast_search(link, limit=1)
-        if results:
-            return results[0].get("duration_string", "0:00")
-        return "0:00"
+        results = VideosSearch(link, limit=1)
+        for result in (await results.next())["result"]:
+            return result["duration"]
 
     async def thumbnail(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        
-        results = await yt_fast_search(link, limit=1)
-        if results:
-            return results[0].get("thumbnail", "")
-        return ""
+        results = VideosSearch(link, limit=1)
+        for result in (await results.next())["result"]:
+            return result["thumbnails"][0]["url"].split("?")[0]
 
     async def video(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
@@ -284,25 +271,21 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        
-        results = await yt_fast_search(link, limit=1)
-        if results:
-            result = results[0]
-            title = result.get("title", "Unknown")
-            duration_min = result.get("duration_string", "0:00")
-            vidid = result.get("id", "")
-            yturl = result.get("url", link)
-            thumbnail = result.get("thumbnail", "")
-            
-            track_details = {
-                "title": title,
-                "link": yturl,
-                "vidid": vidid,
-                "duration_min": duration_min,
-                "thumb": thumbnail,
-            }
-            return track_details, vidid
-        return {}, None
+        results = VideosSearch(link, limit=1)
+        for result in (await results.next())["result"]:
+            title = result["title"]
+            duration_min = result["duration"]
+            vidid = result["id"]
+            yturl = result["link"]
+            thumbnail = result["thumbnails"][0]["url"].split("?")[0]
+        track_details = {
+            "title": title,
+            "link": yturl,
+            "vidid": vidid,
+            "duration_min": duration_min,
+            "thumb": thumbnail,
+        }
+        return track_details, vidid
 
     async def formats(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
@@ -336,16 +319,13 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        
-        results = await yt_fast_search(link, limit=10)
-        if results and query_type < len(results):
-            result = results[query_type]
-            title = result.get("title", "Unknown")
-            duration_min = result.get("duration_string", "0:00")
-            vidid = result.get("id", "")
-            thumbnail = result.get("thumbnail", "")
-            return title, duration_min, thumbnail, vidid
-        return None, None, None, None
+        a = VideosSearch(link, limit=10)
+        result = (await a.next()).get("result")
+        title = result[query_type]["title"]
+        duration_min = result[query_type]["duration"]
+        vidid = result[query_type]["id"]
+        thumbnail = result[query_type]["thumbnails"][0]["url"].split("?")[0]
+        return title, duration_min, thumbnail, vidid
 
     async def download(
         self,
