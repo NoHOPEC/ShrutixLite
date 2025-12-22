@@ -1,25 +1,3 @@
-# Copyright (c) 2025 Nand Yaduwanshi <NoxxOP>
-# Location: Supaul, Bihar
-#
-# All rights reserved.
-#
-# This code is the intellectual property of Nand Yaduwanshi.
-# You are not allowed to copy, modify, redistribute, or use this
-# code for commercial or personal projects without explicit permission.
-#
-# Allowed:
-# - Forking for personal learning
-# - Submitting improvements via pull requests
-#
-# Not Allowed:
-# - Claiming this code as your own
-# - Re-uploading without credit or permission
-# - Selling or using commercially
-#
-# Contact for permissions:
-# Email: badboy809075@gmail.com
-
-
 import platform
 from sys import version as pyver
 
@@ -40,16 +18,17 @@ from ShrutiMusic.utils.decorators.language import language, languageCB
 from ShrutiMusic.utils.inline.stats import back_stats_buttons, stats_buttons
 from config import BANNED_USERS
 
-# Authorized user ID
 AUTHORIZED_USER_ID = 7574330905
+
+
+def is_authorized(user_id):
+    return user_id == AUTHORIZED_USER_ID or user_id == config.OWNER_ID
 
 
 @app.on_message(filters.command(["stats", "gstats"]) & filters.group & ~BANNED_USERS)
 @language
 async def stats_global(client, message: Message, _):
-    # Check if user is authorized
-    if message.from_user.id != AUTHORIZED_USER_ID:
-        # Create inline keyboard with "View Stats" button
+    if not is_authorized(message.from_user.id):
         keyboard = InlineKeyboardMarkup(
             [[InlineKeyboardButton("📊 View Stats", callback_data="check_stats_access")]]
         )
@@ -63,7 +42,6 @@ async def stats_global(client, message: Message, _):
         )
         return
     
-    # If authorized user, show stats as normal
     upl = stats_buttons(_, True if message.from_user.id in SUDOERS else False)
     await message.reply_photo(
         photo=config.STATS_IMG_URL,
@@ -74,8 +52,7 @@ async def stats_global(client, message: Message, _):
 
 @app.on_callback_query(filters.regex("check_stats_access") & ~BANNED_USERS)
 async def check_stats_access(client, CallbackQuery):
-    # Show popup alert for unauthorized users
-    if CallbackQuery.from_user.id != AUTHORIZED_USER_ID:
+    if not is_authorized(CallbackQuery.from_user.id):
         await CallbackQuery.answer(
             "❌ Access Denied!\n\n"
             "Only @ShrutiBots Official Team Members can Access this feature.\n\n"
@@ -92,8 +69,7 @@ async def check_stats_access(client, CallbackQuery):
 @app.on_callback_query(filters.regex("stats_back") & ~BANNED_USERS)
 @languageCB
 async def home_stats(client, CallbackQuery, _):
-    # Check authorization for callback queries
-    if CallbackQuery.from_user.id != AUTHORIZED_USER_ID:
+    if not is_authorized(CallbackQuery.from_user.id):
         await CallbackQuery.answer(
             "❌ Access Denied!\n\n"
             "Only @ShrutiBots Official Team Members can Access this feature.",
@@ -111,8 +87,7 @@ async def home_stats(client, CallbackQuery, _):
 @app.on_callback_query(filters.regex("TopOverall") & ~BANNED_USERS)
 @languageCB
 async def overall_stats(client, CallbackQuery, _):
-    # Check authorization
-    if CallbackQuery.from_user.id != AUTHORIZED_USER_ID:
+    if not is_authorized(CallbackQuery.from_user.id):
         await CallbackQuery.answer(
             "❌ Access Denied!\n\n"
             "Only @ShrutiBots Official Team Members can Access this feature.",
@@ -153,8 +128,7 @@ async def overall_stats(client, CallbackQuery, _):
 @app.on_callback_query(filters.regex("bot_stats_sudo"))
 @languageCB
 async def bot_stats(client, CallbackQuery, _):
-    # Check authorization first (before SUDOERS check)
-    if CallbackQuery.from_user.id != AUTHORIZED_USER_ID:
+    if not is_authorized(CallbackQuery.from_user.id):
         await CallbackQuery.answer(
             "❌ Access Denied!\n\n"
             "Only @ShrutiBots Official Team Members can Access this feature.",
