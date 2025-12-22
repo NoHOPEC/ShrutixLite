@@ -11,14 +11,14 @@ ffmpeg-python
 gitpython
 hachoir
 heroku3
-httpx[http2]
+httpx
 motor
 numpy
 opencv-python
 pillow==9.5.0
 psutil
-py-tgcalls==0.9.7
-ntgcalls==1.1.2
+py-tgcalls
+ntgcalls
 pykeyboard
 python-dotenv
 pyyaml
@@ -27,12 +27,16 @@ speedtest-cli
 spotipy
 tgcrypto
 unidecode
-#uvloop
-yt-dlp
 youtube-search
 youtube-search-python
+pyrofork
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+PyGithub
+#yt-dlp
+git+https://github.com/yt-dlp/yt-dlp.git
 py-yt-search
-#git+https://github.com/yt-dlp/yt-dlp.git
-
 
 
