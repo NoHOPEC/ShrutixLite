@@ -180,19 +180,16 @@ def make_rounded_rectangle(image: Image.Image, size: tuple = (184, 184)) -> Imag
     resize.close()
     return rounded
 
-def add_audio_visualizer(bg: Image.Image, thumb: Image.Image) -> Image.Image:
+def add_audio_visualizer(bg: Image.Image, thumb: Image.Image, center_x: int, center_y: int) -> Image.Image:
     overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
     dominant_color = get_dominant_color(thumb)
     
-    center_x = 750
-    center_y = 290
-    
     num_bars = 30
     bar_width = 4
-    radius_start = 60
-    radius_end = 95
+    radius_start = 100
+    radius_end = 135
     
     import math
     for i in range(num_bars):
@@ -207,8 +204,8 @@ def add_audio_visualizer(bg: Image.Image, thumb: Image.Image) -> Image.Image:
         alpha = 120 - (i % 3) * 30
         draw.line([x1, y1, x2, y2], fill=dominant_color + (alpha,), width=bar_width)
     
-    for r in range(50, 0, -5):
-        alpha = int(15 * (1 - r / 50))
+    for r in range(90, 0, -5):
+        alpha = int(15 * (1 - r / 90))
         draw.ellipse(
             [center_x - r, center_y - r, center_x + r, center_y + r],
             fill=dominant_color + (alpha,)
@@ -269,17 +266,44 @@ async def gen_thumb(videoid: str) -> str:
     bg = await add_controls(thumb)
     image = make_rounded_rectangle(thumb, size=(184, 184))
 
-    paste_x, paste_y = 325, 155
+    paste_x = 325 + (670 - 184) // 2
+    paste_y = 195
     bg.paste(image, (paste_x, paste_y), image)
     
     draw = ImageDraw.Draw(bg)
-    draw.text((540, 165), title, (255, 255, 255), font=FONTS["tfont"])
-    draw.text((540, 210), artist, (255, 255, 255), font=FONTS["cfont"])
     
-    draw.text((540, 250), f"👁 {views_text} Views", (200, 200, 200), font=FONTS["sfont"])
-    draw.text((750, 250), bot_username, (200, 200, 200), font=FONTS["sfont"])
+    title_bbox = draw.textbbox((0, 0), title, font=FONTS["tfont"])
+    title_width = title_bbox[2] - title_bbox[0]
+    title_x = 640 - title_width // 2
+    title_y = 410
+    
+    draw.text((title_x, title_y), title, (255, 255, 255), font=FONTS["tfont"])
+    
+    artist_bbox = draw.textbbox((0, 0), artist, font=FONTS["cfont"])
+    artist_width = artist_bbox[2] - artist_bbox[0]
+    artist_x = 640 - artist_width // 2
+    artist_y = 450
+    
+    draw.text((artist_x, artist_y), artist, (255, 255, 255), font=FONTS["cfont"])
+    
+    views_text_formatted = f"👁 {views_text} Views"
+    views_bbox = draw.textbbox((0, 0), views_text_formatted, font=FONTS["sfont"])
+    views_width = views_bbox[2] - views_bbox[0]
+    views_x = 640 - views_width // 2
+    views_y = 495
+    
+    draw.text((views_x, views_y), views_text_formatted, (200, 200, 200), font=FONTS["sfont"])
+    
+    username_bbox = draw.textbbox((0, 0), bot_username, font=FONTS["sfont"])
+    username_width = username_bbox[2] - username_bbox[0]
+    username_x = 640 - username_width // 2
+    username_y = 525
+    
+    draw.text((username_x, username_y), bot_username, (200, 200, 200), font=FONTS["sfont"])
 
-    bg = add_audio_visualizer(bg, thumb)
+    center_x = paste_x + 92
+    center_y = paste_y + 92
+    bg = add_audio_visualizer(bg, thumb, center_x, center_y)
     bg = add_edge_glow(bg)
     
     bg = ImageEnhance.Contrast(bg).enhance(1.1)
