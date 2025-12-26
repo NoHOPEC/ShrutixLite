@@ -1,8 +1,7 @@
-import asyncio, os, re, httpx, aiofiles.os
-from io import BytesIO
+import asyncio, os, re, httpx, aiofiles.os, yt_dlp
+from io import BytesIO 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 from aiofiles.os import path as aiopath
-from py_yt import VideosSearch
 
 from ..logging import LOGGER
 from ShrutiMusic import app
@@ -26,6 +25,17 @@ FONTS = load_fonts()
 
 FALLBACK_IMAGE_PATH = "ShrutiMusic/assets/controller.png"
 YOUTUBE_IMG_URL = "https://i.ytimg.com/vi/default.jpg"
+
+def yt_fast_search_sync(query, limit=1):
+    """Synchronous version for use in gen_thumb"""
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "extract_flat": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        data = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+        return data.get("entries", [])
 
 async def resize_youtube_thumbnail(img: Image.Image) -> Image.Image:
     target_width, target_height = 1280, 720
@@ -77,8 +87,8 @@ async def fetch_image(url: str) -> Image.Image:
                 try:
                     async with aiofiles.open(FALLBACK_IMAGE_PATH, mode="rb") as f:
                         img = Image.open(BytesIO(await f.read())).convert("RGBA")
-                        img = await resize_youtube_thumbnail(img)
-                        return img
+                    img = await resize_youtube_thumbnail(img)
+                    return img
                 except Exception as e:
                     LOGGER.error("Local fallback image error: %s", e)
                     return Image.new("RGBA", (1280, 720), (255, 255, 255, 255))
@@ -106,22 +116,22 @@ def get_dominant_color(img: Image.Image) -> tuple:
 
 def add_edge_glow(img: Image.Image) -> Image.Image:
     width, height = img.size
-    glow_width = 120
-
+    glow_width = 100
+    
     dominant_color = get_dominant_color(img)
     
     glow_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     
     for i in range(glow_width):
         progress = 1 - (i / glow_width)
-        alpha = int(220 * progress * progress)
+        alpha = int(180 * progress * progress)
         
         glow_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(glow_layer)
         
         draw.rectangle([i, i, width - i, height - i], 
                       outline=dominant_color + (alpha,), 
-                      width=3)
+                      width=2)
         
         glow_overlay = Image.alpha_composite(glow_overlay, glow_layer)
     
@@ -132,15 +142,15 @@ async def add_controls(img: Image.Image) -> Image.Image:
     img = img.filter(ImageFilter.GaussianBlur(radius=10))
     box = (305, 125, 975, 595)
     region = img.crop(box)
-
+    
     try:
         controls = Image.open("ShrutiMusic/assets/controls.png").convert("RGBA")
         controls = controls.resize((1200, 320), Image.Resampling.LANCZOS)
         controls = ImageEnhance.Sharpness(controls).enhance(5.0)
         controls = ImageEnhance.Contrast(controls).enhance(1.0)
         controls = controls.resize((600, 160), Image.Resampling.LANCZOS)
-        controls_x = 305 + (670 - 600) // 2
-        controls_y = 415
+        controls_x = 305 + (670 - 600) // 2 
+        controls_y = 415  
     except Exception as e:
         LOGGER.error("Controls image loading error: %s", e)
         controls = Image.new("RGBA", (600, 160), (0, 0, 0, 0))
@@ -183,7 +193,7 @@ def make_rounded_rectangle(image: Image.Image, size: tuple = (184, 184)) -> Imag
 def add_audio_visualizer(bg: Image.Image, thumb: Image.Image) -> Image.Image:
     overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-
+    
     dominant_color = get_dominant_color(thumb)
     
     center_x = 750
@@ -244,17 +254,27 @@ async def gen_thumb(videoid: str) -> str:
 
     try:
         url = f"https://www.youtube.com/watch?v={videoid}"
-        results = VideosSearch(url, limit=1)
-        result = (await results.next())["result"][0]
-        title = clean_text(result.get("title", "Unknown Title"), limit=35)
-        artist = clean_text(result.get("channel", {}).get("name", "Unknown Artist"), limit=35)
-        thumbnail_url = result.get("thumbnails", [{}])[0].get("url", "").split("?")[0]
-        views = result.get("viewCount", {}).get("text", "0").replace(" views", "").replace(",", "")
-        try:
-            views_count = int(views)
-            views_text = format_views(views_count)
-        except:
-            views_text = "0"
+        
+        # Run sync function in thread to avoid blocking
+        results = await asyncio.to_thread(yt_fast_search_sync, url, 1)
+        
+        if results:
+            result = results[0]
+            title = clean_text(result.get("title", "Unknown Title"), limit=25)
+            artist = clean_text(result.get("uploader", "Unknown Artist"), limit=28)
+            thumbnail_url = result.get("thumbnail", "")
+            if thumbnail_url:
+                thumbnail_url = thumbnail_url.split("?")[0]
+            
+            view_count = result.get("view_count", 0)
+            if view_count:
+                views_text = format_views(view_count)
+            else:
+                views_text = "0"
+        else:
+            title, artist, views_text = "Unknown Title", "Unknown Artist", "0"
+            thumbnail_url = YOUTUBE_IMG_URL
+            
     except Exception as e:
         LOGGER.error("YouTube metadata fetch error for video %s: %s", videoid, e)
         title, artist, views_text = "Unknown Title", "Unknown Artist", "0"
@@ -269,15 +289,15 @@ async def gen_thumb(videoid: str) -> str:
     bg = await add_controls(thumb)
     image = make_rounded_rectangle(thumb, size=(184, 184))
 
-    paste_x, paste_y = 325, 155
+    paste_x, paste_y = 325, 155 
     bg.paste(image, (paste_x, paste_y), image)
     
     draw = ImageDraw.Draw(bg)
-    draw.text((540, 165), title, (255, 255, 255), font=FONTS["tfont"])
-    draw.text((540, 210), artist, (255, 255, 255), font=FONTS["cfont"])
+    draw.text((540, 155), title, (255, 255, 255), font=FONTS["tfont"])  
+    draw.text((540, 200), artist, (255, 255, 255), font=FONTS["cfont"])
     
-    draw.text((540, 250), f"👁 {views_text} Views", (200, 200, 200), font=FONTS["sfont"])
-    draw.text((750, 250), bot_username, (200, 200, 200), font=FONTS["sfont"])
+    draw.text((540, 235), f"👁 {views_text} Views", (200, 200, 200), font=FONTS["sfont"])
+    draw.text((750, 235), bot_username, (200, 200, 200), font=FONTS["sfont"])
 
     bg = add_audio_visualizer(bg, thumb)
     bg = add_edge_glow(bg)
