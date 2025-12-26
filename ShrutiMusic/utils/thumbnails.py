@@ -10,9 +10,9 @@ from ShrutiMusic import app
 def load_fonts():
     try:
         return {
-            "cfont": ImageFont.truetype("ShrutiMusic/assets/cfont.ttf", 26),
-            "tfont": ImageFont.truetype("ShrutiMusic/assets/font.ttf", 32),
-            "sfont": ImageFont.truetype("ShrutiMusic/assets/cfont.ttf", 22),
+            "cfont": ImageFont.truetype("ShrutiMusic/assets/cfont.ttf", 24),
+            "tfont": ImageFont.truetype("ShrutiMusic/assets/font.ttf", 30),
+            "sfont": ImageFont.truetype("ShrutiMusic/assets/cfont.ttf", 20),
         }
     except Exception as e:
         LOGGER.error("Font loading error: %s, using default fonts", e)
@@ -130,7 +130,7 @@ def add_edge_glow(img: Image.Image) -> Image.Image:
 
 async def add_controls(img: Image.Image) -> Image.Image:
     img = img.filter(ImageFilter.GaussianBlur(radius=10))
-    box = (305, 125, 975, 500)
+    box = (305, 125, 975, 595)
     region = img.crop(box)
 
     try:
@@ -140,11 +140,11 @@ async def add_controls(img: Image.Image) -> Image.Image:
         controls = ImageEnhance.Contrast(controls).enhance(1.0)
         controls = controls.resize((600, 160), Image.Resampling.LANCZOS)
         controls_x = 305 + (670 - 600) // 2
-        controls_y = 325
+        controls_y = 415
     except Exception as e:
         LOGGER.error("Controls image loading error: %s", e)
         controls = Image.new("RGBA", (600, 160), (0, 0, 0, 0))
-        controls_x, controls_y = 335, 325
+        controls_x, controls_y = 335, 415
 
     dark_region = ImageEnhance.Brightness(region).enhance(0.5)
     mask = Image.new("L", dark_region.size, 0)
@@ -159,7 +159,7 @@ async def add_controls(img: Image.Image) -> Image.Image:
     controls.close()
     return img
 
-def make_rounded_rectangle(image: Image.Image, size: tuple = (200, 200)) -> Image.Image:
+def make_rounded_rectangle(image: Image.Image, size: tuple = (184, 184)) -> Image.Image:
     width, height = image.size
     side_length = min(width, height)
     crop = image.crop(
@@ -172,7 +172,7 @@ def make_rounded_rectangle(image: Image.Image, size: tuple = (200, 200)) -> Imag
     )
     resize = crop.resize(size, Image.Resampling.LANCZOS)
     mask = Image.new("L", size, 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, *size), radius=25, fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, *size), radius=20, fill=255)
 
     rounded = ImageOps.fit(resize, size)
     rounded.putalpha(mask)
@@ -186,25 +186,25 @@ def add_audio_visualizer(bg: Image.Image, thumb: Image.Image, center_x: int, cen
 
     dominant_color = get_dominant_color(thumb)
     
-    num_bars = 36
-    bar_width = 5
-    radius_start = 115
+    num_bars = 30
+    bar_width = 4
+    radius_start = 100
     
     import math
     for i in range(num_bars):
         angle = (i / num_bars) * 2 * math.pi
-        bar_height = 18 + (i % 4) * 8
+        bar_height = 20 + (i % 3) * 10
         
         x1 = center_x + int(radius_start * math.cos(angle))
         y1 = center_y + int(radius_start * math.sin(angle))
         x2 = center_x + int((radius_start + bar_height) * math.cos(angle))
         y2 = center_y + int((radius_start + bar_height) * math.sin(angle))
         
-        alpha = 140 - (i % 4) * 25
+        alpha = 120 - (i % 3) * 30
         draw.line([x1, y1, x2, y2], fill=dominant_color + (alpha,), width=bar_width)
     
-    for r in range(105, 0, -8):
-        alpha = int(12 * (1 - r / 105))
+    for r in range(90, 0, -5):
+        alpha = int(15 * (1 - r / 90))
         draw.ellipse(
             [center_x - r, center_y - r, center_x + r, center_y + r],
             fill=dominant_color + (alpha,)
@@ -242,7 +242,7 @@ async def gen_thumb(videoid: str) -> str:
         url = f"https://www.youtube.com/watch?v={videoid}"
         results = VideosSearch(url, limit=1)
         result = (await results.next())["result"][0]
-        title = clean_text(result.get("title", "Unknown Title"), limit=40)
+        title = clean_text(result.get("title", "Unknown Title"), limit=35)
         artist = clean_text(result.get("channel", {}).get("name", "Unknown Artist"), limit=35)
         thumbnail_url = result.get("thumbnails", [{}])[0].get("url", "").split("?")[0]
         views = result.get("viewCount", {}).get("text", "0").replace(" views", "").replace(",", "")
@@ -264,36 +264,28 @@ async def gen_thumb(videoid: str) -> str:
     thumb = await fetch_image(thumbnail_url)
     bg = await add_controls(thumb)
     
-    paste_x = 325 + (670 - 200) // 2
-    paste_y = 140
-    center_x = paste_x + 100
-    center_y = paste_y + 100
+    paste_x = 325
+    paste_y = 155
+    center_x = paste_x + 92
+    center_y = paste_y + 92
     
     bg = add_audio_visualizer(bg, thumb, center_x, center_y)
     
-    image = make_rounded_rectangle(thumb, size=(200, 200))
+    image = make_rounded_rectangle(thumb, size=(184, 184))
     bg.paste(image, (paste_x, paste_y), image)
     
     draw = ImageDraw.Draw(bg)
     
-    title_y = 525
-    draw.text((640, title_y), title, (255, 255, 255), font=FONTS["tfont"], anchor="mm")
+    draw.text((540, 170), title, (255, 255, 255), font=FONTS["tfont"])
+    draw.text((540, 215), artist, (255, 255, 255), font=FONTS["cfont"])
     
-    artist_y = 565
-    draw.text((640, artist_y), artist, (240, 240, 240), font=FONTS["cfont"], anchor="mm")
-    
-    views_text_formatted = f"👁 {views_text} Views"
-    bot_text = f"  •  {bot_username}"
-    combined_text = views_text_formatted + bot_text
-    
-    info_y = 605
-    draw.text((640, info_y), combined_text, (200, 200, 200), font=FONTS["sfont"], anchor="mm")
+    draw.text((540, 255), f"👁 {views_text} Views", (200, 200, 200), font=FONTS["sfont"])
+    draw.text((750, 255), bot_username, (200, 200, 200), font=FONTS["sfont"])
 
     bg = add_edge_glow(bg)
     
-    bg = ImageEnhance.Contrast(bg).enhance(1.15)
-    bg = ImageEnhance.Color(bg).enhance(1.25)
-    bg = ImageEnhance.Brightness(bg).enhance(1.05)
+    bg = ImageEnhance.Contrast(bg).enhance(1.1)
+    bg = ImageEnhance.Color(bg).enhance(1.2)
 
     try:
         await asyncio.to_thread(bg.save, save_dir, format="PNG", quality=95, optimize=True)
