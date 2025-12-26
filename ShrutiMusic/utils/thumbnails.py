@@ -276,11 +276,14 @@ async def gen_thumb(videoid: str) -> str:
     
     draw = ImageDraw.Draw(bg)
     
-    draw.text((540, 170), title, (255, 255, 255), font=FONTS["tfont"])
-    draw.text((540, 215), artist, (255, 255, 255), font=FONTS["cfont"])
+    draw.text((540, 165), title, (255, 255, 255), font=FONTS["tfont"])
+    draw.text((540, 205), artist, (255, 255, 255), font=FONTS["cfont"])
     
-    draw.text((540, 255), f"👁 {views_text} Views", (200, 200, 200), font=FONTS["sfont"])
-    draw.text((750, 255), bot_username, (200, 200, 200), font=FONTS["sfont"])
+    draw.text((540, 245), f"{views_text} Views", (200, 200, 200), font=FONTS["sfont"])
+    draw.text((730, 245), bot_username, (200, 200, 200), font=FONTS["sfont"])
+    
+    duration_text = "Duration: 3:45"
+    draw.text((540, 270), duration_text, (180, 180, 180), font=FONTS["sfont"])
 
     bg = add_edge_glow(bg)
     
